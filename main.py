@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
 
-# --- CONFIGURACIÓN DE CORREO (Jim Simons / RenTech Method) ---
+# --- CONFIGURACIÓN DE CORREO (RenTech Method) ---
 MI_MAIL = "gustavoaaguiar99@gmail.com"
 CLAVE_APP = "oshrmhfqzvabekzt" 
 
@@ -24,12 +24,14 @@ def enviar_alerta_mail(asunto, cuerpo):
     msg['From'] = MI_MAIL
     msg['To'] = MI_MAIL
     try:
+        # Configuración para Gmail
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         server.login(MI_MAIL, CLAVE_APP)
         server.send_message(msg)
         server.quit()
         return True
     except Exception as e:
+        st.sidebar.error(f"Error de envío: {e}")
         return False
 
 # --- INTERFAZ PRINCIPAL ---
@@ -45,7 +47,18 @@ c3.metric("Ticket sugerido (8%)", f"AR$ {(SALDO_ACTUAL * 0.08):,.2f}")
 
 st.divider()
 
-# Lista de 14 activos con sus ratios
+# --- BARRA LATERAL (SIDEBAR) ---
+st.sidebar.header("🛠 Panel de Control")
+
+# BOTÓN DE TESTEO DE MAIL
+if st.sidebar.button("🧪 ENVIAR MAIL DE TEST"):
+    test_cuerpo = f"¡Conexión Exitosa!\n\nEl bot Simons GG 11 ya puede enviarte alertas a {MI_MAIL}.\nEstado de cartera: {rendimiento_total:+.2f}%"
+    if enviar_alerta_mail("🦅 Test de Conexión Simons", test_cuerpo):
+        st.sidebar.success("✅ Mail de prueba enviado.")
+    else:
+        st.sidebar.error("❌ Falló el envío.")
+
+# --- MONITOR DE MERCADO (14 ACTIVOS) ---
 activos = {
     'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, 
     'GGAL': 10, 'YPF': 1, 'VIST': 3, 'PAM': 25, 'BMA': 10,
@@ -57,7 +70,7 @@ def fetch_market():
     datos, ccls = [], []
     for t, r in activos.items():
         try:
-            # Ajuste de tickers locales (YPFD y PAMP)
+            # Tickers Locales
             tk_ars = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
             
             h_usd = yf.download(t, period="3mo", interval="1d", progress=False)
@@ -70,7 +83,7 @@ def fetch_market():
             ccl = (p_a * r) / p_u
             ccls.append(ccl)
             
-            # Modelo Markov (Clima)
+            # Algoritmo Markov
             ret = np.diff(np.log(h_usd.Close.values.flatten().reshape(-1, 1)), axis=0)
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
             clima = "🟢" if model.predict(ret)[-1] == 0 else "🔴"
@@ -103,30 +116,21 @@ if not df_res.empty:
         use_container_width=True, hide_index=True
     )
     
-    # --- LÓGICA DE ALERTAS ---
+    # --- ALERTAS DE ARBITRAJE ---
     alertas = df_final[df_final['Señal'].str.contains("COMPRA|VENTA")]
     
     if not alertas.empty:
-        st.sidebar.subheader("🚀 Alertas Detectadas")
-        for _, row in alertas.iterrows():
-            st.sidebar.write(f"**{row['Activo']}** ({row['Señal']})")
-        
-        if st.sidebar.button("📧 ENVIAR INFORME AL MAIL"):
-            cuerpo = f"🦅 INFORME SIMONS GG 11\n"
-            cuerpo += f"Patrimonio Total: AR$ {SALDO_ACTUAL:,.2f}\n"
+        st.sidebar.subheader("🚀 Alertas de Arbitraje")
+        if st.sidebar.button("📧 ENVIAR SEÑALES AL MAIL"):
+            cuerpo = f"🦅 INFORME DE ARBITRAJE - SIMONS GG 11\n"
             cuerpo += f"Rendimiento Cartera: {rendimiento_total:+.2f}%\n"
-            cuerpo += "-"*30 + "\n"
+            cuerpo += "="*30 + "\n"
             for _, r in alertas.iterrows():
-                cuerpo += f"Activo: {r['Activo']}\n"
-                cuerpo += f"Señal: {r['Señal']}\n"
-                cuerpo += f"Desvío CCL: {r['Desvío %']}\n"
-                cuerpo += f"Clima: {r['Clima']}\n"
+                cuerpo += f"ACTIVO: {r['Activo']} -> {r['Señal']}\n"
+                cuerpo += f"Desvío: {r['Desvío %']} | Clima: {r['Clima']}\n"
                 cuerpo += "-"*10 + "\n"
             
-            if enviar_alerta_mail(f"🦅 Alerta Simons: {len(alertas)} señales", cuerpo):
-                st.sidebar.success(f"Mail enviado a {MI_MAIL}")
-            else:
-                st.sidebar.error("Error al enviar el mail. Revisá la clave de App.")
+            if enviar_alerta_mail(f"🦅 Alerta: {len(alertas)} señales detectadas", cuerpo):
+                st.sidebar.success("Informe enviado.")
 else:
-    st.warning("Buscando señales de arbitraje...")
-    
+    st.warning("Conectando con el mercado...")
