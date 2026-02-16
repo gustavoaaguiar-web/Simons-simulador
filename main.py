@@ -6,15 +6,14 @@ from hmmlearn.hmm import GaussianHMM
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Simons GG v10.4", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG 11", page_icon="🦅", layout="wide")
 
 # Datos manuales (Independientes de Excel)
 CAPITAL_INICIAL = 30000000.0
 SALDO_ACTUAL = 33362112.69 
 
 # --- INTERFAZ PRINCIPAL ---
-st.title("🦅 Simons GG v10.4 🤑")
-st.subheader("Simulador de Inversiones - Algoritmo Simons")
+st.title("🦅Simons GG 11 🤑")
 
 # Métricas principales
 rendimiento = ((SALDO_ACTUAL / CAPITAL_INICIAL) - 1) * 100
@@ -25,7 +24,6 @@ c3.metric("Ticket sugerido (8%)", f"AR$ {(SALDO_ACTUAL * 0.08):,.2f}")
 
 # --- MONITOR DE MERCADO ---
 st.divider()
-st.write("### 📊 Monitor de Arbitraje (14 Activos)")
 
 # Lista completa de 14 activos con sus ratios de conversión
 activos = {
@@ -40,10 +38,9 @@ def fetch_market():
     for t, r in activos.items():
         try:
             # AJUSTE DE TICKERS PARA MERCADO ARGENTINO (.BA)
-            # Manejo especial de YPF y PAMPA
             tk_ars = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
             
-            # Descarga datos: 3 meses para el HMM y 1 día para el precio actual
+            # Descarga datos
             h_usd = yf.download(t, period="3mo", interval="1d", progress=False)
             h_ars = yf.download(tk_ars, period="1d", interval="1m", progress=False)
             
@@ -55,7 +52,7 @@ def fetch_market():
             ccl = (p_a * r) / p_u
             ccls.append(ccl)
             
-            # Modelo HMM (Hidden Markov Model) para detectar el "clima"
+            # Modelo HMM (Hidden Markov Model)
             ret = np.diff(np.log(h_usd.Close.values.flatten().reshape(-1, 1)), axis=0)
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
             clima_idx = model.predict(ret)[-1]
@@ -83,10 +80,8 @@ if not df_res.empty:
     def procesar(row):
         desvio = (row['CCL'] / ccl_m) - 1
         row['Desvío %'] = f"{desvio*100:+.2f}%"
-        # Lógica de señales: Compra si está barato y el clima es favorable
         if desvio < -0.0065 and row['Clima'] == "🟢": 
             row['Señal'] = "🟢 COMPRA"
-        # Venta si está caro (independiente del clima)
         elif desvio > 0.0065: 
             row['Señal'] = "🔴 VENTA"
         else: 
@@ -95,7 +90,6 @@ if not df_res.empty:
 
     df_final = df_res.apply(procesar, axis=1)
     
-    # Estilo visual de la tabla
     def color_señal(val):
         if 'COMPRA' in str(val): return 'background-color: #004d00; color: white; font-weight: bold'
         if 'VENTA' in str(val): return 'background-color: #4d0000; color: white; font-weight: bold'
@@ -108,10 +102,9 @@ if not df_res.empty:
         hide_index=True
     )
     
-    # Alerta visual en el sidebar si hay oportunidades
-    oportunidades = df_final[df_final['Señal'].str.contains("COMPRA|VENTA")]
-    if not oportunidades.empty:
-        st.sidebar.success(f"Oportunidades detectadas: {len(oportunidades)}")
+    # Alerta en sidebar
+    ops = df_final[df_final['Señal'].str.contains("COMPRA|VENTA")]
+    if not ops.empty:
+        st.sidebar.success(f"Oportunidades: {len(ops)}")
 else:
-    st.warning("No se pudieron obtener datos. Verificá la conexión a Yahoo Finance.")
-            
+    st.warning("Cargando datos del mercado...")
