@@ -1,7 +1,6 @@
 streamlit
-yfinance
-hmmlearn
-numpy
-pandas
-streamlit-autorefresh
 st-gsheets-connection
+yfinance
+pandas
+numpy
+hmmlearn
