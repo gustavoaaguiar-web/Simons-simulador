@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Simons GG v10.4", page_icon="🦅", layout="wide")
 
-# Datos manuales para no depender del Excel
+# Datos manuales (Independientes de Excel)
 CAPITAL_INICIAL = 30000000.0
 SALDO_ACTUAL = 33362112.69 
 
@@ -25,11 +25,13 @@ c3.metric("Ticket sugerido (8%)", f"AR$ {(SALDO_ACTUAL * 0.08):,.2f}")
 
 # --- MONITOR DE MERCADO ---
 st.divider()
-st.write("### 📊 Monitor de Arbitraje (Precios en tiempo real)")
+st.write("### 📊 Monitor de Arbitraje (14 Activos)")
 
+# Lista completa de 14 activos con sus ratios de conversión
 activos = {
-    'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
-    'GGAL':10, 'YPF':1, 'VIST':3, 'PAM':25
+    'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, 
+    'GGAL': 10, 'YPF': 1, 'VIST': 3, 'PAM': 25, 'BMA': 10,
+    'CEPU': 10, 'GOOGL': 58, 'AMZN': 144, 'META': 24
 }
 
 @st.cache_data(ttl=300)
@@ -37,24 +39,37 @@ def fetch_market():
     datos, ccls = [], []
     for t, r in activos.items():
         try:
-            # Descarga datos
+            # AJUSTE DE TICKERS PARA MERCADO ARGENTINO (.BA)
+            # Manejo especial de YPF y PAMPA
             tk_ars = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
+            
+            # Descarga datos: 3 meses para el HMM y 1 día para el precio actual
             h_usd = yf.download(t, period="3mo", interval="1d", progress=False)
             h_ars = yf.download(tk_ars, period="1d", interval="1m", progress=False)
             
+            if h_usd.empty or h_ars.empty:
+                continue
+
             p_u = float(h_usd.Close.iloc[-1])
             p_a = float(h_ars.Close.iloc[-1])
             ccl = (p_a * r) / p_u
             ccls.append(ccl)
             
-            # Modelo HMM (Clima de mercado)
+            # Modelo HMM (Hidden Markov Model) para detectar el "clima"
             ret = np.diff(np.log(h_usd.Close.values.flatten().reshape(-1, 1)), axis=0)
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
             clima_idx = model.predict(ret)[-1]
             clima = "🟢" if clima_idx == 0 else "🔴"
             
-            datos.append({"Activo": t, "CCL": ccl, "Clima": clima, "USD": p_u, "ARS": p_a})
-        except: continue
+            datos.append({
+                "Activo": t, 
+                "CCL": ccl, 
+                "Clima": clima, 
+                "USD": round(p_u, 2), 
+                "ARS": round(p_a, 2)
+            })
+        except: 
+            continue
     
     df = pd.DataFrame(datos)
     ccl_m = np.median(ccls) if ccls else 0
@@ -68,24 +83,35 @@ if not df_res.empty:
     def procesar(row):
         desvio = (row['CCL'] / ccl_m) - 1
         row['Desvío %'] = f"{desvio*100:+.2f}%"
-        if desvio < -0.0065 and row['Clima'] == "🟢": row['Señal'] = "🟢 COMPRA"
-        elif desvio > 0.0065: row['Señal'] = "🔴 VENTA"
-        else: row['Señal'] = "⚖️ MANTENER"
+        # Lógica de señales: Compra si está barato y el clima es favorable
+        if desvio < -0.0065 and row['Clima'] == "🟢": 
+            row['Señal'] = "🟢 COMPRA"
+        # Venta si está caro (independiente del clima)
+        elif desvio > 0.0065: 
+            row['Señal'] = "🔴 VENTA"
+        else: 
+            row['Señal'] = "⚖️ MANTENER"
         return row
 
     df_final = df_res.apply(procesar, axis=1)
     
-    # Estilo de la tabla
+    # Estilo visual de la tabla
     def color_señal(val):
-        if 'COMPRA' in str(val): return 'background-color: #004d00; color: white'
-        if 'VENTA' in str(val): return 'background-color: #4d0000; color: white'
+        if 'COMPRA' in str(val): return 'background-color: #004d00; color: white; font-weight: bold'
+        if 'VENTA' in str(val): return 'background-color: #4d0000; color: white; font-weight: bold'
         return ''
 
     st.dataframe(
         df_final[['Activo', 'CCL', 'Clima', 'Señal', 'Desvío %', 'ARS', 'USD']]
         .style.applymap(color_señal, subset=['Señal']), 
-        use_container_width=True, hide_index=True
+        use_container_width=True, 
+        hide_index=True
     )
+    
+    # Alerta visual en el sidebar si hay oportunidades
+    oportunidades = df_final[df_final['Señal'].str.contains("COMPRA|VENTA")]
+    if not oportunidades.empty:
+        st.sidebar.success(f"Oportunidades detectadas: {len(oportunidades)}")
 else:
-    st.warning("Cargando datos financieros...")
+    st.warning("No se pudieron obtener datos. Verificá la conexión a Yahoo Finance.")
             
