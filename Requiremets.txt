@@ -1,5 +1,5 @@
 streamlit
 yfinance
-hmmlearn
+hmmlearn==0.3.3
 pandas
 numpy
