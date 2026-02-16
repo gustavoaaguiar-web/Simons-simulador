@@ -1,6 +1,6 @@
 streamlit
 yfinance
-hmmlearn
+hmmlearn==0.3.3
 numpy
 pandas
 st-gsheets-connection
