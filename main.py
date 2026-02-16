@@ -8,7 +8,6 @@ import json
 from datetime import datetime, time, timedelta
 
 # --- CONFIGURACIÓN DE ZONA HORARIA ---
-# Ajuste manual: Restamos 3 horas al UTC del servidor para tener la hora de Argentina
 def obtener_hora_argentina():
     return datetime.now() - timedelta(hours=3)
 
@@ -36,6 +35,7 @@ def cargar_datos():
             u = df.iloc[-1]
             return float(u['saldo']), json.loads(str(u['posiciones']).replace("'", '"')), json.loads(str(u['historial']).replace("'", '"'))
     except:
+        # Respaldo con tus datos actuales si falla la conexión
         return 33362112.69, {}, [{"fecha": "2026-02-14", "t": 33362112.69}]
 
 if 'saldo' not in st.session_state:
@@ -45,7 +45,7 @@ if 'saldo' not in st.session_state:
 # --- INTERFAZ ---
 st.title("🦅 Simons GG v10.4 🤑")
 
-# Cartel de estado con la hora corregida
+# Cartel de estado
 if mercado_abierto:
     if es_ventana_liq:
         st.warning(f"⚠️ MODO LIQUIDACIÓN: Cerrar posiciones antes de las 16:50. Hora Arg: {ahora.strftime('%H:%M')}")
@@ -86,7 +86,8 @@ def fetch_market():
             
             ret = np.diff(np.log(h_usd.Close.values.flatten().reshape(-1, 1)), axis=0)
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
-            clima = "🟢" if model.predict(ret)[-1] == 0 else "🔴"
+            clima_idx = model.predict(ret)[-1]
+            clima = "🟢" if clima_idx == 0 else "🔴"
             
             datos.append({
                 "Activo": t, "CCL": f"{ccl:.2f}", "Clima": clima,
@@ -96,6 +97,7 @@ def fetch_market():
         except: continue
     
     df = pd.DataFrame(datos)
+    ccl_m = 0
     if not df.empty:
         ccl_m = np.median([float(x) for x in df['CCL']])
         df['Desvío %'] = df.apply(lambda x: f"{((float(x['CCL']) / ccl_m) - 1) * 100:+.2f}%", axis=1)
@@ -119,7 +121,8 @@ def color_señal(val):
     else: return ''
     return f'background-color: {color}; color: white; font-weight: bold'
 
-st.dataframe(df_m.style.applymap(color_señal, subset=['Señal']), use_container_width=True, hide_index=True)
+if not df_m.empty:
+    st.dataframe(df_m.style.applymap(color_señal, subset=['Señal']), use_container_width=True, hide_index=True)
 
 # --- GUARDADO ---
 st.divider()
