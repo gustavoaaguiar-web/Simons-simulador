@@ -1,0 +1,7 @@
+streamlit
+yfinance
+hmmlearn
+numpy
+pandas
+streanlit-autorefresh
+st-gsheets-connection
