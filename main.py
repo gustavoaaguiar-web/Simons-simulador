@@ -7,9 +7,15 @@ from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
 
-# --- CONFIGURACIÓN DE CORREO (RenTech Method) ---
-MI_MAIL = "gustavoaaguiar99@gmail.com"
-CLAVE_APP = "oshrmhfqzvabekzt" 
+# --- PUNTO 2: SEGURIDAD DE SECRETS ---
+# Esta sección busca tus credenciales en el apartado "Secrets" de Streamlit Cloud.
+# Si no las encuentra, usa las que definimos como respaldo.
+try:
+    MI_MAIL = st.secrets["MI_MAIL"]
+    CLAVE_APP = st.secrets["CLAVE_APP"]
+except:
+    MI_MAIL = "gustavoaaguiar99@gmail.com"
+    CLAVE_APP = "oshrmhfqzvabekzt"
 
 # --- CONFIGURACIÓN APP ---
 st.set_page_config(page_title="Simons GG 11", page_icon="🦅", layout="wide")
@@ -24,20 +30,17 @@ def enviar_alerta_mail(asunto, cuerpo):
     msg['From'] = MI_MAIL
     msg['To'] = MI_MAIL
     try:
-        # Configuración para Gmail
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         server.login(MI_MAIL, CLAVE_APP)
         server.send_message(msg)
         server.quit()
         return True
-    except Exception as e:
-        st.sidebar.error(f"Error de envío: {e}")
+    except:
         return False
 
-# --- INTERFAZ PRINCIPAL ---
+# --- INTERFAZ ---
 st.title("🦅Simons GG 11 🤑")
 
-# Cálculo de rendimiento de cartera
 rendimiento_total = ((SALDO_ACTUAL / CAPITAL_INICIAL) - 1) * 100
 
 c1, c2, c3 = st.columns(3)
@@ -47,18 +50,7 @@ c3.metric("Ticket sugerido (8%)", f"AR$ {(SALDO_ACTUAL * 0.08):,.2f}")
 
 st.divider()
 
-# --- BARRA LATERAL (SIDEBAR) ---
-st.sidebar.header("🛠 Panel de Control")
-
-# BOTÓN DE TESTEO DE MAIL
-if st.sidebar.button("🧪 ENVIAR MAIL DE TEST"):
-    test_cuerpo = f"¡Conexión Exitosa!\n\nEl bot Simons GG 11 ya puede enviarte alertas a {MI_MAIL}.\nEstado de cartera: {rendimiento_total:+.2f}%"
-    if enviar_alerta_mail("🦅 Test de Conexión Simons", test_cuerpo):
-        st.sidebar.success("✅ Mail de prueba enviado.")
-    else:
-        st.sidebar.error("❌ Falló el envío.")
-
-# --- MONITOR DE MERCADO (14 ACTIVOS) ---
+# --- LÓGICA DE MERCADO (14 Activos) ---
 activos = {
     'AAPL': 20, 'TSLA': 15, 'NVDA': 24, 'MSFT': 30, 'MELI': 120, 
     'GGAL': 10, 'YPF': 1, 'VIST': 3, 'PAM': 25, 'BMA': 10,
@@ -70,20 +62,14 @@ def fetch_market():
     datos, ccls = [], []
     for t, r in activos.items():
         try:
-            # Tickers Locales
             tk_ars = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
-            
             h_usd = yf.download(t, period="3mo", interval="1d", progress=False)
             h_ars = yf.download(tk_ars, period="1d", interval="1m", progress=False)
             
-            if h_usd.empty or h_ars.empty: continue
-
-            p_u = float(h_usd.Close.iloc[-1])
-            p_a = float(h_ars.Close.iloc[-1])
+            p_u, p_a = float(h_usd.Close.iloc[-1]), float(h_ars.Close.iloc[-1])
             ccl = (p_a * r) / p_u
             ccls.append(ccl)
             
-            # Algoritmo Markov
             ret = np.diff(np.log(h_usd.Close.values.flatten().reshape(-1, 1)), axis=0)
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
             clima = "🟢" if model.predict(ret)[-1] == 0 else "🔴"
@@ -111,26 +97,29 @@ if not df_res.empty:
     df_final = df_res.apply(procesar, axis=1)
     
     st.dataframe(
-        df_final[['Activo', 'CCL', 'Clima', 'Señal', 'Desvío %', 'ARS', 'USD']]
+        df_final[['Activo', 'Señal', 'Desvío %', 'Clima', 'CCL', 'ARS', 'USD']]
         .style.applymap(lambda x: 'background-color: #004d00; color: white' if 'COMPRA' in str(x) else ('background-color: #4d0000; color: white' if 'VENTA' in str(x) else ''), subset=['Señal']), 
         use_container_width=True, hide_index=True
     )
     
-    # --- ALERTAS DE ARBITRAJE ---
+    # --- SIDEBAR & ALERTAS ---
+    st.sidebar.header("🛠 Simons Control")
     alertas = df_final[df_final['Señal'].str.contains("COMPRA|VENTA")]
     
+    if st.sidebar.button("🧪 TEST DE CONEXIÓN"):
+        if enviar_alerta_mail("🦅 Simons Test", "Conexión confirmada."):
+            st.sidebar.success("Mail enviado.")
+
     if not alertas.empty:
-        st.sidebar.subheader("🚀 Alertas de Arbitraje")
-        if st.sidebar.button("📧 ENVIAR SEÑALES AL MAIL"):
-            cuerpo = f"🦅 INFORME DE ARBITRAJE - SIMONS GG 11\n"
-            cuerpo += f"Rendimiento Cartera: {rendimiento_total:+.2f}%\n"
+        if st.sidebar.button("📧 ENVIAR SEÑALES"):
+            cuerpo = f"🦅 INFORME SIMONS GG 11\nCartera: {rendimiento_total:+.2f}%\n"
             cuerpo += "="*30 + "\n"
             for _, r in alertas.iterrows():
-                cuerpo += f"ACTIVO: {r['Activo']} -> {r['Señal']}\n"
-                cuerpo += f"Desvío: {r['Desvío %']} | Clima: {r['Clima']}\n"
+                cuerpo += f"{r['Activo']}: {r['Señal']} ({r['Desvío %']})\n"
+                cuerpo += f"Clima: {r['Clima']}\n"
                 cuerpo += "-"*10 + "\n"
-            
-            if enviar_alerta_mail(f"🦅 Alerta: {len(alertas)} señales detectadas", cuerpo):
-                st.sidebar.success("Informe enviado.")
+            if enviar_alerta_mail(f"🦅 Alerta: {len(alertas)} señales", cuerpo):
+                st.sidebar.success("Señales enviadas.")
 else:
-    st.warning("Conectando con el mercado...")
+    st.warning("Escaneando mercado...")
+            
