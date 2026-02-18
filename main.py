@@ -14,9 +14,8 @@ def obtener_hora_argentina():
 ahora_dt = obtener_hora_argentina()
 
 # --- CONFIGURACIÓN APP & SEGURIDAD ---
-st.set_page_config(page_title="Simons GG v10.9.2", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v10.9.3", page_icon="🦅", layout="wide")
 
-# Credenciales (Secrets o Respaldo)
 try:
     MI_MAIL = st.secrets["MI_MAIL"]
     CLAVE_APP = st.secrets["CLAVE_APP"]
@@ -26,11 +25,11 @@ except:
 
 CAPITAL_INICIAL = 30000000.0
 
-# --- INICIALIZACIÓN INTERNA (Sin Excel) ---
+# --- INICIALIZACIÓN INTERNA (Session State) ---
 if 'saldo' not in st.session_state:
     st.session_state.saldo = 33362112.69
 if 'pos' not in st.session_state:
-    st.session_state.pos = {}  # Formato: {'VIST': {'m': monto, 'p': precio, 'ccl': ccl}}
+    st.session_state.pos = {} 
 if 'historial_patrimonio' not in st.session_state:
     st.session_state.historial_patrimonio = []
 
@@ -54,12 +53,11 @@ valor_cedears = sum(float(v['m']) for v in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
 
-# Guardar evolución en el historial interno
+# Registro de historial para gráfico
 st.session_state.historial_patrimonio.append({"fecha": ahora_dt.strftime("%H:%M:%S"), "valor": patrimonio_total})
 
 # --- INTERFAZ SUPERIOR ---
-st.title("🦅 Simons GG v10.9.2 🤑")
-st.subheader("Modo: Almacenamiento Local (Alta Velocidad)")
+st.title("🦅 Simons GG v13 🤑")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
@@ -101,7 +99,7 @@ if ccl_m is not None and not df_m.empty:
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         
-        # COMPRA AUTO
+        # COMPRA
         if desvio < -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.08
             if st.session_state.saldo >= monto_t:
@@ -110,7 +108,7 @@ if ccl_m is not None and not df_m.empty:
                 enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot compró {activo}\nCCL: {row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%")
                 st.rerun()
 
-        # VENTA AUTO
+        # VENTA
         elif desvio > 0.005 and activo in st.session_state.pos:
             monto_v = st.session_state.pos[activo]['m']
             st.session_state.saldo += monto_v
@@ -121,23 +119,22 @@ if ccl_m is not None and not df_m.empty:
 # --- VISUALIZACIÓN ---
 st.divider()
 if ccl_m:
-    st.write(f"### 🎯 CCL Mediano Mercado: ${ccl_m:.2f}")
+    # Ajuste solicitado: Solo CCL $Valor
+    st.header(f"CCL ${ccl_m:,.2f}")
+    
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima']=="🟢" else ("🔴 VENTA" if ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
     st.dataframe(df_m[['Activo', 'Señal', 'Clima', 'CCL', 'ARS']], use_container_width=True, hide_index=True)
 
-# CARTERA Y EVOLUCIÓN
-st.sidebar.header("📂 Cartera en Tiempo Real")
+# CARTERA Y EVOLUCIÓN EN SIDEBAR
+st.sidebar.header("📂 Cartera Actual")
 if st.session_state.pos:
     for t, info in st.session_state.pos.items():
         st.sidebar.markdown(f"**{t}**")
         st.sidebar.write(f"Invertido: AR$ {info['m']:,.2f}")
-        st.sidebar.caption(f"Compra: ${info['p']:.2f} | CCL: ${info['ccl']:.2f}")
+        st.sidebar.caption(f"Entrada: ${info['p']:.2f}")
         st.sidebar.divider()
 else:
-    st.sidebar.info("Sin posiciones abiertas.")
+    st.sidebar.info("Sin posiciones.")
 
-# Gráfico de evolución rápida
 if len(st.session_state.historial_patrimonio) > 1:
-    st.sidebar.write("### Evolución hoy")
-    df_hist = pd.DataFrame(st.session_state.historial_patrimonio)
-    st.sidebar.line_chart(df_hist.set_index('fecha'))
+    st.sidebar.line_chart(pd.DataFrame(st.session_state.historial_patrimonio).set_index('fecha'))
