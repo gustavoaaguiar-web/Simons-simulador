@@ -49,7 +49,7 @@ rendimiento_h = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
 ticket_sugerido = patrimonio_total * 0.08
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v11 🤑")
+st.title("🦅 Simons GG v12 🤑")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_h:+.2f}%")
 c2.metric("Efectivo disponible", f"AR$ {st.session_state.saldo:,.2f}")
@@ -87,8 +87,8 @@ if not df_res.empty:
     def procesar(row):
         desvio = (row['CCL'] / ccl_m) - 1
         row['Desvío %'] = f"{desvio*100:+.2f}%"
-        if desvio < -0.0065 and row['Clima'] == "🟢": row['Señal'] = "🟢 COMPRA"
-        elif desvio > 0.0065: row['Señal'] = "🔴 VENTA"
+        if desvio < -0.005 and row['Clima'] == "🟢": row['Señal'] = "🟢 COMPRA"
+        elif desvio > 0.005: row['Señal'] = "🔴 VENTA"
         else: row['Señal'] = "⚖️ MANTENER"
         return row
     df_final = df_res.apply(procesar, axis=1)
