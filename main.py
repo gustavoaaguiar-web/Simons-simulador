@@ -5,6 +5,8 @@ import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from datetime import datetime, timedelta
 import smtplib
+import json
+import os
 from email.message import EmailMessage
 
 # --- CONFIGURACIÓN DE TIEMPO ---
@@ -14,7 +16,7 @@ def obtener_hora_argentina():
 ahora_dt = obtener_hora_argentina()
 
 # --- CONFIGURACIÓN APP & SEGURIDAD ---
-st.set_page_config(page_title="Simons GG v10.9.3", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v11.0", page_icon="🦅", layout="wide")
 
 try:
     MI_MAIL = st.secrets["MI_MAIL"]
@@ -24,14 +26,32 @@ except:
     CLAVE_APP = "oshrmhfqzvabekzt"
 
 CAPITAL_INICIAL = 30000000.0
+ARCHIVO_ESTADO = "simons_state.json" # Persistencia local/nube
 
-# --- INICIALIZACIÓN INTERNA (Session State) ---
+# --- FUNCIONES DE PERSISTENCIA (Para evitar avisos repetidos) ---
+def cargar_estado_persistente():
+    if os.path.exists(ARCHIVO_ESTADO):
+        with open(ARCHIVO_ESTADO, "r") as f:
+            return json.load(f)
+    return {
+        "saldo": 33362112.69,
+        "pos": {},
+        "historial_patrimonio": []
+    }
+
+def guardar_estado_persistente():
+    estado = {
+        "saldo": st.session_state.saldo,
+        "pos": st.session_state.pos,
+        "historial_patrimonio": st.session_state.historial_patrimonio
+    }
+    with open(ARCHIVO_ESTADO, "w") as f:
+        json.dump(estado, f)
+
+# Inicialización única
 if 'saldo' not in st.session_state:
-    st.session_state.saldo = 33362112.69
-if 'pos' not in st.session_state:
-    st.session_state.pos = {} 
-if 'historial_patrimonio' not in st.session_state:
-    st.session_state.historial_patrimonio = []
+    data = cargar_estado_persistente()
+    st.session_state.update(data)
 
 # --- FUNCIONES CORE ---
 def enviar_alerta_mail(asunto, cuerpo):
@@ -53,11 +73,8 @@ valor_cedears = sum(float(v['m']) for v in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
 
-# Registro de historial para gráfico
-st.session_state.historial_patrimonio.append({"fecha": ahora_dt.strftime("%H:%M:%S"), "valor": patrimonio_total})
-
-# --- INTERFAZ SUPERIOR ---
-st.title("🦅 Simons GG v13 🤑")
+# --- INTERFAZ ---
+st.title("🦅 Simons GG v11.0 🤑")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
@@ -71,7 +88,7 @@ activos_dict = {
     'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def fetch_mercado():
     datos, ccls = [], []
     for t, r in activos_dict.items():
@@ -93,48 +110,44 @@ def fetch_mercado():
 
 df_m, ccl_m = fetch_mercado()
 
-# --- LÓGICA DE TRADING AUTOMÁTICO ---
+# --- LÓGICA DE TRADING (Aviso Único) ---
 if ccl_m is not None and not df_m.empty:
     for _, row in df_m.iterrows():
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         
-        # COMPRA
+        # COMPRA: Solo si NO existe ya en la cartera guardada
         if desvio < -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.08
             if st.session_state.saldo >= monto_t:
                 st.session_state.saldo -= monto_t
                 st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS'], 'ccl': row['CCL']}
                 enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot compró {activo}\nCCL: {row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%")
+                guardar_estado_persistente()
                 st.rerun()
 
-        # VENTA
+        # VENTA: Solo si existe en la cartera
         elif desvio > 0.005 and activo in st.session_state.pos:
             monto_v = st.session_state.pos[activo]['m']
             st.session_state.saldo += monto_v
             del st.session_state.pos[activo]
             enviar_alerta_mail(f"🦅 VENTA: {activo}", f"Bot vendió {activo}\nDesvío: {desvio*100:.2f}%")
+            guardar_estado_persistente()
             st.rerun()
 
 # --- VISUALIZACIÓN ---
 st.divider()
 if ccl_m:
-    # Ajuste solicitado: Solo CCL $Valor
     st.header(f"CCL ${ccl_m:,.2f}")
-    
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima']=="🟢" else ("🔴 VENTA" if ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
     st.dataframe(df_m[['Activo', 'Señal', 'Clima', 'CCL', 'ARS']], use_container_width=True, hide_index=True)
 
-# CARTERA Y EVOLUCIÓN EN SIDEBAR
+# CARTERA EN SIDEBAR
 st.sidebar.header("📂 Cartera Actual")
 if st.session_state.pos:
     for t, info in st.session_state.pos.items():
         st.sidebar.markdown(f"**{t}**")
         st.sidebar.write(f"Invertido: AR$ {info['m']:,.2f}")
-        st.sidebar.caption(f"Entrada: ${info['p']:.2f}")
         st.sidebar.divider()
 else:
-    st.sidebar.info("Sin posiciones.")
-
-if len(st.session_state.historial_patrimonio) > 1:
-    st.sidebar.line_chart(pd.DataFrame(st.session_state.historial_patrimonio).set_index('fecha'))
+    st.sidebar.info("Sin posiciones abiertas.")
