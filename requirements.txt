@@ -1,5 +1,6 @@
 streamlit
-yfinance
 pandas
+yfinance
 numpy
 hmmlearn
+st-gsheets-connection
