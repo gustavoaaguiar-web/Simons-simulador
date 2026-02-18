@@ -1,10 +1,8 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import yfinance as yf
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
-import json
 from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
@@ -16,8 +14,9 @@ def obtener_hora_argentina():
 ahora_dt = obtener_hora_argentina()
 
 # --- CONFIGURACIÓN APP & SEGURIDAD ---
-st.set_page_config(page_title="Simons GG v10.9.1 AUTO", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v10.9.2", page_icon="🦅", layout="wide")
 
+# Credenciales (Secrets o Respaldo)
 try:
     MI_MAIL = st.secrets["MI_MAIL"]
     CLAVE_APP = st.secrets["CLAVE_APP"]
@@ -25,10 +24,15 @@ except:
     MI_MAIL = "gustavoaaguiar99@gmail.com"
     CLAVE_APP = "oshrmhfqzvabekzt"
 
-URL_DB = "https://docs.google.com/spreadsheets/d/19BvTkyD2ddrMsX1ghYGgnnq-BAfYJ_7qkNGqAsJel-M/edit?usp=drivesdk"
 CAPITAL_INICIAL = 30000000.0
 
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- INICIALIZACIÓN INTERNA (Sin Excel) ---
+if 'saldo' not in st.session_state:
+    st.session_state.saldo = 33362112.69
+if 'pos' not in st.session_state:
+    st.session_state.pos = {}  # Formato: {'VIST': {'m': monto, 'p': precio, 'ccl': ccl}}
+if 'historial_patrimonio' not in st.session_state:
+    st.session_state.historial_patrimonio = []
 
 # --- FUNCIONES CORE ---
 def enviar_alerta_mail(asunto, cuerpo):
@@ -45,58 +49,32 @@ def enviar_alerta_mail(asunto, cuerpo):
         return True
     except: return False
 
-def cargar_datos():
-    try:
-        df = conn.read(spreadsheet=URL_DB, worksheet="Hoja1", ttl=0)
-        if not df.empty:
-            u = df.iloc[-1]
-            pos = json.loads(str(u['posiciones']).replace("'", '"'))
-            hist = json.loads(str(u['historial']).replace("'", '"'))
-            return float(u['saldo']), pos, hist
-    except:
-        return 33362112.69, {}, [{"fecha": ahora_dt.strftime("%Y-%m-%d"), "t": 33362112.69}]
-
-def guardar_progreso_auto():
-    try:
-        df_actual = conn.read(spreadsheet=URL_DB, worksheet="Hoja1", ttl=0)
-        nueva_fila = pd.DataFrame([{
-            "saldo": float(st.session_state.saldo),
-            "posiciones": json.dumps(st.session_state.pos),
-            "historial": json.dumps(st.session_state.hist),
-            "update": obtener_hora_argentina().strftime("%Y-%m-%d %H:%M")
-        }])
-        df_final = pd.concat([df_actual, nueva_fila], ignore_index=True)
-        conn.update(spreadsheet=URL_DB, worksheet="Hoja1", data=df_final)
-    except: pass
-
-# --- INICIALIZACIÓN DE SESIÓN ---
-if 'saldo' not in st.session_state:
-    s, p, h = cargar_datos()
-    st.session_state.update({'saldo': s, 'pos': p, 'hist': h})
-
-# --- CÁLCULO DE MÉTRICAS EN TIEMPO REAL ---
-# Calculamos esto ANTES de mostrar nada para que refleje la última operación
-valor_cedears = sum(float(v.get('m', 0)) for v in st.session_state.pos.values())
+# --- CÁLCULO DE MÉTRICAS ---
+valor_cedears = sum(float(v['m']) for v in st.session_state.pos.values())
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
 
+# Guardar evolución en el historial interno
+st.session_state.historial_patrimonio.append({"fecha": ahora_dt.strftime("%H:%M:%S"), "valor": patrimonio_total})
+
 # --- INTERFAZ SUPERIOR ---
-st.title("🦅 Simons GG v10.9.1 - BOT AUTO 🤑")
+st.title("🦅 Simons GG v10.9.2 🤑")
+st.subheader("Modo: Almacenamiento Local (Alta Velocidad)")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
 c2.metric("Efectivo disponible", f"AR$ {st.session_state.saldo:,.2f}")
 c3.metric("Invertido en Cedears", f"AR$ {valor_cedears:,.2f}")
 
-# --- MONITOR DE MERCADO Y BOT ---
+# --- MONITOR DE MERCADO ---
 activos_dict = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 
     'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
 
-@st.cache_data(ttl=120)
-def procesar_bot():
+@st.cache_data(ttl=60)
+def fetch_mercado():
     datos, ccls = [], []
     for t, r in activos_dict.items():
         try:
@@ -112,53 +90,54 @@ def procesar_bot():
             datos.append({"Activo": t, "CCL": ccl, "Clima": clima, "ARS": p_a})
         except: continue
     df = pd.DataFrame(datos)
-    ccl_m = np.median(ccls) if ccls else None
+    ccl_m = np.median(ccls) if len(ccls) > 0 else None
     return df, ccl_m
 
-df_m, ccl_m = procesar_bot()
+df_m, ccl_m = fetch_mercado()
 
-# --- LÓGICA DE EJECUCIÓN (VIST COMPRADO SEGÚN TU MAIL) ---
-if ccl_m and not df_m.empty:
+# --- LÓGICA DE TRADING AUTOMÁTICO ---
+if ccl_m is not None and not df_m.empty:
     for _, row in df_m.iterrows():
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         
-        # COMPRA AUTO (Ticket 8%)
+        # COMPRA AUTO
         if desvio < -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.08
             if st.session_state.saldo >= monto_t:
                 st.session_state.saldo -= monto_t
                 st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS'], 'ccl': row['CCL']}
-                enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot ejecutó compra de {activo}\nCCL: {row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%")
-                guardar_progreso_auto()
-                st.rerun() # Forzar recarga para actualizar total y efectivo
+                enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot compró {activo}\nCCL: {row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%")
+                st.rerun()
 
         # VENTA AUTO
         elif desvio > 0.005 and activo in st.session_state.pos:
             monto_v = st.session_state.pos[activo]['m']
             st.session_state.saldo += monto_v
             del st.session_state.pos[activo]
-            enviar_alerta_mail(f"🦅 VENTA: {activo}", f"Bot ejecutó venta de {activo}\nDesvío: {desvio*100:.2f}%")
-            guardar_progreso_auto()
+            enviar_alerta_mail(f"🦅 VENTA: {activo}", f"Bot vendió {activo}\nDesvío: {desvio*100:.2f}%")
             st.rerun()
 
-# --- VISUALIZACIÓN DE TABLA Y CARTERA ---
+# --- VISUALIZACIÓN ---
+st.divider()
 if ccl_m:
-    st.write(f"### CCL Mediano: ${ccl_m:.2f}")
+    st.write(f"### 🎯 CCL Mediano Mercado: ${ccl_m:.2f}")
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima']=="🟢" else ("🔴 VENTA" if ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
     st.dataframe(df_m[['Activo', 'Señal', 'Clima', 'CCL', 'ARS']], use_container_width=True, hide_index=True)
 
-# Panel lateral con la operación que mencionaste
-st.sidebar.header("📂 Cartera Actual")
+# CARTERA Y EVOLUCIÓN
+st.sidebar.header("📂 Cartera en Tiempo Real")
 if st.session_state.pos:
-    for ticker, info in st.session_state.pos.items():
-        st.sidebar.subheader(f"🦅 {ticker}")
-        st.sidebar.write(f"Inversión: AR$ {info['m']:,.2f}")
-        st.sidebar.caption(f"Precio compra: ${info['p']:.2f} | CCL: ${info['ccl']:.2f}")
+    for t, info in st.session_state.pos.items():
+        st.sidebar.markdown(f"**{t}**")
+        st.sidebar.write(f"Invertido: AR$ {info['m']:,.2f}")
+        st.sidebar.caption(f"Compra: ${info['p']:.2f} | CCL: ${info['ccl']:.2f}")
+        st.sidebar.divider()
 else:
-    st.sidebar.info("Buscando oportunidades...")
+    st.sidebar.info("Sin posiciones abiertas.")
 
-st.sidebar.divider()
-if st.sidebar.button("💾 Sincronizar Excel"):
-    guardar_progreso_auto()
-    st.sidebar.success("OK")
+# Gráfico de evolución rápida
+if len(st.session_state.historial_patrimonio) > 1:
+    st.sidebar.write("### Evolución hoy")
+    df_hist = pd.DataFrame(st.session_state.historial_patrimonio)
+    st.sidebar.line_chart(df_hist.set_index('fecha'))
