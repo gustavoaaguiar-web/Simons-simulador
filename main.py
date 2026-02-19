@@ -18,7 +18,7 @@ activos_dict = {
     'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
 
-# --- PERSISTENCIA (Fundamental para que el despertador no repita mails) ---
+# --- PERSISTENCIA ---
 ARCHIVO_ESTADO = "simons_state.json"
 def cargar_estado():
     if os.path.exists(ARCHIVO_ESTADO):
@@ -33,7 +33,7 @@ if 'saldo' not in st.session_state:
     st.session_state.update(cargar_estado())
 
 # --- LÓGICA DE MERCADO ---
-@st.cache_data(ttl=120) # Cache de 2 min para el despertador
+@st.cache_data(ttl=120)
 def fetch_full_market():
     datos, ccls = [], []
     for t, r in activos_dict.items():
@@ -56,31 +56,49 @@ def fetch_full_market():
 
 df_m, ccl_m = fetch_full_market()
 
-# --- LÓGICA DE ALERTAS AUTOMÁTICAS ---
-if ccl_m and not df_m.empty:
-    for _, row in df_m.iterrows():
-        desvio = (row['CCL'] / ccl_m) - 1
-        activo = row['Activo']
-        
-        # Lógica de Compra
-        if desvio < -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
-            monto_t = (st.session_state.saldo + sum(v['m'] for v in st.session_state.pos.values())) * 0.08
-            if st.session_state.saldo >= monto_t:
-                st.session_state.saldo -= monto_t
-                st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS'], 'ccl': row['CCL']}
-                # Enviar Mail... (aquí va tu función de mail)
-                guardar_estado()
-                st.rerun()
-
-# --- INTERFAZ (Tabla Ordenada) ---
-if ccl_m:
+# --- PROCESAMIENTO TABLA PRINCIPAL ---
+if ccl_m is not None:
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
-    df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima'] == "🟢" else "⚖️ MANTENER", axis=1)
+    df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
+    # Orden solicitado: Activo | % | Clima | Señal | ARS | USD
     df_final = df_m[['Activo', '%', 'Clima', 'Señal', 'ARS', 'USD']]
-    
-    st.title("🦅 Simons GG v11.5")
-    st.metric("CCL Mercado", f"${ccl_m:,.2f}")
+
+# --- CÁLCULO PATRIMONIO ---
+valor_cedears = 0.0
+for t, info in st.session_state.pos.items():
+    precio_hoy = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
+    if precio_hoy == 0: precio_hoy = info['p']
+    valor_cedears += (info['m'] / info['p']) * precio_hoy
+
+patrimonio_total = st.session_state.saldo + valor_cedears
+rendimiento = ((patrimonio_total / 30000000.0) - 1) * 100
+
+# --- INTERFAZ ---
+st.title("🦅 Simons GG v11.5 🤑")
+c1, c2, c3 = st.columns(3)
+c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento:+.2f}%")
+c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
+c3.metric("En Cedears", f"AR$ {valor_cedears:,.2f}")
+
+st.divider()
+if ccl_m:
+    st.header(f"CCL ${ccl_m:,.2f}")
     st.dataframe(df_final, use_container_width=True, hide_index=True, height=530)
 
-# PANEL LATERAL CON GANANCIAS (IGUAL A V11.4)
-# ... (Se mantiene igual que la versión anterior para ver ganancias en pesos y %)
+# --- PANEL LATERAL (CARTERA DETALLADA) ---
+st.sidebar.header("📂 Cartera Detallada")
+if st.session_state.pos:
+    for t, info in st.session_state.pos.items():
+        p_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
+        if p_actual == 0: p_actual = info['p']
+        
+        cant_nom = info['m'] / info['p']
+        valor_hoy = cant_nom * p_actual
+        gan_ars = valor_hoy - info['m']
+        gan_pct = ((p_actual / info['p']) - 1) * 100
+        color = "green" if gan_ars >= 0 else "red"
+        
+        with st.sidebar.expander(f"🦅 {t}", expanded=True):
+            st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
+            st.write(f"**Compra:** ${info['p']:,.2f} | **Actual:** ${p_actual:,.2f}")
+            st.caption(f"Inversión: AR$ {info['m']:,.2f}")
