@@ -3,4 +3,3 @@ pandas
 yfinance
 numpy
 hmmlearn
-st-gsheets-connection
