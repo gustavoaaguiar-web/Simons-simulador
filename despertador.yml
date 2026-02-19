@@ -1,0 +1,13 @@
+name: Despertador Simons GG
+on:
+  schedule:
+    - cron: '*/5 * * * *' # Se ejecuta cada 5 minutos
+  workflow_dispatch:      # Permite ejecutarlo manualmente
+
+jobs:
+  ping_app:
+    runs-with: ubuntu-latest
+    steps:
+      - name: Hacer Ping a la App
+        run: |
+          curl -s https://tu-app-de-streamlit.streamlit.app > /dev/null
