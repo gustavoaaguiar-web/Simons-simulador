@@ -10,7 +10,21 @@ import os
 from email.message import EmailMessage
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v11.5", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v11.6", page_icon="🦅", layout="wide")
+
+# Componente de Auto-Refresh (Cada 5 minutos = 300 segundos)
+# Esto reemplaza al "despertador" externo mientras la pestaña esté abierta
+st.empty() 
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = datetime.now()
+
+# Inyectamos un pequeño script para forzar el refresh
+st.markdown(
+    f"""
+    <meta http-equiv="refresh" content="300">
+    """,
+    unsafe_allow_html=True
+)
 
 activos_dict = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
@@ -33,7 +47,7 @@ if 'saldo' not in st.session_state:
     st.session_state.update(cargar_estado())
 
 # --- LÓGICA DE MERCADO ---
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=290) # Cache levemente inferior al refresh
 def fetch_full_market():
     datos, ccls = [], []
     for t, r in activos_dict.items():
@@ -60,21 +74,20 @@ df_m, ccl_m = fetch_full_market()
 if ccl_m is not None:
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
-    # Orden solicitado: Activo | % | Clima | Señal | ARS | USD
     df_final = df_m[['Activo', '%', 'Clima', 'Señal', 'ARS', 'USD']]
 
 # --- CÁLCULO PATRIMONIO ---
 valor_cedears = 0.0
 for t, info in st.session_state.pos.items():
-    precio_hoy = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
-    if precio_hoy == 0: precio_hoy = info['p']
+    p_actual_fila = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+    precio_hoy = p_actual_fila[0] if len(p_actual_fila) > 0 and p_actual_fila[0] > 0 else info['p']
     valor_cedears += (info['m'] / info['p']) * precio_hoy
 
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento = ((patrimonio_total / 30000000.0) - 1) * 100
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v11.5 🤑")
+st.title("🦅 Simons GG v11.6 🤑")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento:+.2f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
@@ -84,13 +97,14 @@ st.divider()
 if ccl_m:
     st.header(f"CCL ${ccl_m:,.2f}")
     st.dataframe(df_final, use_container_width=True, hide_index=True, height=530)
+    st.caption(f"Última actualización: {datetime.now().strftime('%H:%M:%S')} (Próximo refresh en 5 min)")
 
-# --- PANEL LATERAL (CARTERA DETALLADA) ---
+# --- PANEL LATERAL ---
 st.sidebar.header("📂 Cartera Detallada")
 if st.session_state.pos:
     for t, info in st.session_state.pos.items():
-        p_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
-        if p_actual == 0: p_actual = info['p']
+        p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+        p_actual = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
         
         cant_nom = info['m'] / info['p']
         valor_hoy = cant_nom * p_actual
