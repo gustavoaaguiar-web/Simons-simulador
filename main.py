@@ -16,7 +16,7 @@ def obtener_hora_argentina():
 ahora_dt = obtener_hora_argentina()
 
 # --- CONFIGURACIÓN APP & SEGURIDAD ---
-st.set_page_config(page_title="Simons GG v11.1", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v11.2", page_icon="🦅", layout="wide")
 
 try:
     MI_MAIL = st.secrets["MI_MAIL"]
@@ -28,7 +28,7 @@ except:
 CAPITAL_INICIAL = 30000000.0
 ARCHIVO_ESTADO = "simons_state.json"
 
-# --- PERSISTENCIA ---
+# --- PERSISTENCIA MEJORADA ---
 def cargar_estado_persistente():
     if os.path.exists(ARCHIVO_ESTADO):
         with open(ARCHIVO_ESTADO, "r") as f:
@@ -36,7 +36,11 @@ def cargar_estado_persistente():
     return {"saldo": 33362112.69, "pos": {}, "historial_patrimonio": []}
 
 def guardar_estado_persistente():
-    estado = {"saldo": st.session_state.saldo, "pos": st.session_state.pos, "historial_patrimonio": st.session_state.historial_patrimonio}
+    estado = {
+        "saldo": st.session_state.saldo,
+        "pos": st.session_state.pos,
+        "historial_patrimonio": st.session_state.historial_patrimonio
+    }
     with open(ARCHIVO_ESTADO, "w") as f:
         json.dump(estado, f)
 
@@ -86,20 +90,38 @@ def fetch_mercado():
 
 df_m, ccl_m = fetch_mercado()
 
-# --- LÓGICA DE TRADING ---
-# Calculamos patrimonio total dinámico sumando efectivo + valor actual de mercado de posiciones
-valor_actual_cedears = 0
+# --- CORRECCIÓN: CÁLCULO DINÁMICO DE VALORES ---
+valor_actual_cedears = 0.0
+detalle_posiciones = []
+
 if not df_m.empty:
     for t, info in st.session_state.pos.items():
-        # Buscar precio actual en el dataframe de mercado
-        precio_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
-        # Cantidad nominal aproximada (monto invertido / precio entrada)
-        cant_nom = info['m'] / info['p']
-        valor_actual_cedears += (cant_nom * precio_actual)
+        try:
+            # Obtener precio actual de la tabla de mercado
+            precio_hoy = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
+            # Valorización
+            cant_nominal = info['m'] / info['p']
+            valor_mercado_activo = cant_nominal * precio_hoy
+            valor_actual_cedears += valor_mercado_activo
+            
+            # Datos para el sidebar
+            ganancia_pct = ((precio_hoy / info['p']) - 1) * 100
+            ganancia_ars = valor_mercado_activo - info['m']
+            detalle_posiciones.append({
+                "t": t, "inv": info['m'], "gan_a": ganancia_ars, 
+                "gan_p": ganancia_pct, "p_e": info['p'], "p_h": precio_hoy
+            })
+        except:
+            # Si no hay datos hoy, mantenemos el valor de compra para no mostrar 0
+            valor_actual_cedears += info['m']
+            detalle_posiciones.append({
+                "t": t, "inv": info['m'], "gan_a": 0, "gan_p": 0, "p_e": info['p'], "p_h": info['p']
+            })
 
 patrimonio_total = st.session_state.saldo + valor_actual_cedears
 rendimiento_total = ((patrimonio_total / CAPITAL_INICIAL) - 1) * 100
 
+# --- LÓGICA DE TRADING (Aviso Único) ---
 if ccl_m is not None and not df_m.empty:
     for _, row in df_m.iterrows():
         desvio = (row['CCL'] / ccl_m) - 1
@@ -110,29 +132,28 @@ if ccl_m is not None and not df_m.empty:
             if st.session_state.saldo >= monto_t:
                 st.session_state.saldo -= monto_t
                 st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS'], 'ccl': row['CCL']}
-                enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot compró {activo}\nPrecio: {row['ARS']}\nDesvío: {desvio*100:.2f}%")
+                enviar_alerta_mail(f"🦅 COMPRA: {activo}", f"Bot compró {activo}\nARS: {row['ARS']}\nDesvío: {desvio*100:.2f}%")
                 guardar_estado_persistente()
                 st.rerun()
 
         elif desvio > 0.005 and activo in st.session_state.pos:
-            # Al vender, sumamos el valor actual (monto original + ganancia/pérdida)
             precio_v = row['ARS']
             info_c = st.session_state.pos[activo]
-            monto_final = (info_c['m'] / info_c['p']) * precio_v
-            st.session_state.saldo += monto_final
-            ganancia_neta = monto_final - info_c['m']
+            monto_recuperado = (info_c['m'] / info_c['p']) * precio_v
+            st.session_state.saldo += monto_recuperado
+            ganancia_neta = monto_recuperado - info_c['m']
             del st.session_state.pos[activo]
-            enviar_alerta_mail(f"🦅 VENTA: {activo}", f"Vendido {activo}\nGanancia: AR$ {ganancia_neta:,.2f}\nDesvío: {desvio*100:.2f}%")
+            enviar_alerta_mail(f"🦅 VENTA: {activo}", f"Vendido {activo}\nGanancia: AR$ {ganancia_neta:,.2f}")
             guardar_estado_persistente()
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v11.1 🤑")
+st.title("🦅 Simons GG v11.2 🤑")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
-c2.metric("Efectivo disponible", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("Valor Mercado Cedears", f"AR$ {valor_actual_cedears:,.2f}")
+col_a, col_b, col_c = st.columns(3)
+col_a.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
+col_b.metric("Efectivo disponible", f"AR$ {st.session_state.saldo:,.2f}")
+col_c.metric("Valor Mercado Cedears", f"AR$ {valor_actual_cedears:,.2f}")
 
 st.divider()
 if ccl_m:
@@ -140,20 +161,12 @@ if ccl_m:
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima']=="🟢" else ("🔴 VENTA" if ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
     st.dataframe(df_m[['Activo', 'Señal', 'Clima', 'CCL', 'ARS']], use_container_width=True, hide_index=True)
 
-# SIDEBAR: DETALLE DE GANANCIAS POR OPERACIÓN
+# SIDEBAR ACTUALIZADO
 st.sidebar.header("📂 Cartera y Ganancias")
-if st.session_state.pos:
-    for t, info in st.session_state.pos.items():
-        precio_hoy = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0] if not df_m.empty else info['p']
-        ganancia_pct = ((precio_hoy / info['p']) - 1) * 100
-        ganancia_ars = (info['m'] * (ganancia_pct / 100))
-        
-        color = "green" if ganancia_ars >= 0 else "red"
-        
-        st.sidebar.markdown(f"### {t}")
-        st.sidebar.write(f"Inversión: AR$ {info['m']:,.2f}")
-        st.sidebar.markdown(f"**Ganancia: :{color}[AR$ {ganancia_ars:,.2f} ({ganancia_pct:+.2f}%)]**")
-        st.sidebar.caption(f"Entrada: ${info['p']:.2f} | Actual: ${precio_hoy:.2f}")
-        st.sidebar.divider()
-else:
-    st.sidebar.info("Sin posiciones.")
+for d in detalle_posiciones:
+    color = "green" if d['gan_a'] >= 0 else "red"
+    st.sidebar.markdown(f"### {d['t']}")
+    st.sidebar.write(f"Inversión: AR$ {d['inv']:,.2f}")
+    st.sidebar.markdown(f"**Ganancia: :{color}[AR$ {d['gan_a']:,.2f} ({d['gan_p']:+.2f}%)]**")
+    st.sidebar.caption(f"Entrada: ${d['p_e']:.2f} | Actual: ${d['p_h']:.2f}")
+    st.sidebar.divider()
