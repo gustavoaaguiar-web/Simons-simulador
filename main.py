@@ -10,7 +10,7 @@ import os
 from email.message import EmailMessage
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.3", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v12.4", page_icon="🦅", layout="wide")
 
 # Auto-Refresh cada 5 minutos
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
@@ -45,9 +45,10 @@ def guardar_estado():
             "notificados": st.session_state.notificados
         }, f)
 
-# --- FUNCIÓN DE MAIL (Solo en transacción confirmada) ---
-def enviar_alerta_operacion(asunto, cuerpo, op_id):
-    if op_id not in st.session_state.notificados:
+# --- FUNCIÓN DE MAIL ---
+def enviar_alerta_operacion(asunto, cuerpo, op_id, es_test=False):
+    # Si es test, salteamos la validación de 'ya notificado' para que siempre llegue
+    if es_test or op_id not in st.session_state.notificados:
         MI_MAIL = "gustavoaaguiar99@gmail.com"
         CLAVE_APP = "oshrmhfqzvabekzt"
         msg = EmailMessage()
@@ -60,10 +61,13 @@ def enviar_alerta_operacion(asunto, cuerpo, op_id):
             server.login(MI_MAIL, CLAVE_APP)
             server.send_message(msg)
             server.quit()
-            st.session_state.notificados.append(op_id)
-            if len(st.session_state.notificados) > 100: st.session_state.notificados.pop(0)
+            if not es_test:
+                st.session_state.notificados.append(op_id)
+                if len(st.session_state.notificados) > 100: st.session_state.notificados.pop(0)
             return True
-        except: return False
+        except Exception as e:
+            if es_test: st.sidebar.error(f"Error: {e}")
+            return False
     return False
 
 # --- CAPTURA DE MERCADO ---
@@ -100,35 +104,33 @@ for t, info in st.session_state.pos.items():
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 
-# --- LÓGICA DE TRADING (0.5%) ---
+# --- TRADING ---
 if ccl_m:
     for _, row in df_m.iterrows():
         if np.isnan(row['CCL']): continue
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
-        ts_id = datetime.now().strftime("%Y%m%d_%H%M") # ID único por minuto para evitar spam
+        ts_id = datetime.now().strftime("%Y%m%d_%H%M")
 
-        # COMPRA
         if desvio <= -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.08
             if st.session_state.saldo >= monto_t:
                 st.session_state.saldo -= monto_t
                 st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS']}
-                enviar_alerta_operacion(f"🦅 COMPRA SIMONS: {activo}", f"EJECUTADO: {activo}\nPrecio: ${row['ARS']}\nCCL Acción: ${row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%", f"buy_{activo}_{ts_id}")
+                enviar_alerta_operacion(f"🦅 COMPRA: {activo}", f"EJECUTADO: {activo}\nPrecio: ${row['ARS']}\nCCL: ${row['CCL']:.2f}", f"buy_{activo}_{ts_id}")
                 guardar_estado()
                 st.rerun()
 
-        # VENTA
         elif desvio >= 0.005 and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * row['ARS']
             del st.session_state.pos[activo]
-            enviar_alerta_operacion(f"🦅 VENTA SIMONS: {activo}", f"EJECUTADO: {activo}\nPrecio: ${row['ARS']}\nCCL Acción: ${row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%", f"sell_{activo}_{ts_id}")
+            enviar_alerta_operacion(f"🦅 VENTA: {activo}", f"EJECUTADO: {activo}\nPrecio: ${row['ARS']}\nCCL: ${row['CCL']:.2f}", f"sell_{activo}_{ts_id}")
             guardar_estado()
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v12.3 🤑")
+st.title("🦅 Simons GG v12.4 🤑")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
 c2.metric("Efectivo Disponible", f"AR$ {st.session_state.saldo:,.2f}")
@@ -140,17 +142,26 @@ if ccl_m:
     st.header(f"CCL Promedio: ${ccl_m:,.2f}")
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) <= -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) >= 0.005 else "⚖️ MANTENER"), axis=1)
-    
-    # Formatear CCL para la tabla
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
-
-    # Columnas: Activo | % | Clima | Señal | CCL | ARS | USD
     st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], 
-                 column_config={"CCL_Display": "CCL"},
-                 use_container_width=True, hide_index=True, height=530)
+                 column_config={"CCL_Display": "CCL"}, use_container_width=True, hide_index=True, height=530)
 
 # --- SIDEBAR ---
 st.sidebar.header("📂 Cartera y Ganancias")
+
+# BOTÓN DE TEST
+if st.sidebar.button("🧪 Probar Envío de Mail"):
+    exito = enviar_alerta_operacion(
+        "🦅 TEST DE ENVÍO - SIMONS", 
+        f"Esta es una prueba de compra/venta ficticia.\nHora: {datetime.now().strftime('%H:%M:%S')}\nEstado del Bot: v12.4 OK", 
+        "test_manual", 
+        es_test=True
+    )
+    if exito: st.sidebar.success("Mail enviado! Revisa tu casilla.")
+    else: st.sidebar.error("Error al enviar. Revisa la consola.")
+
+st.sidebar.divider()
+
 for t, info in st.session_state.pos.items():
     p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
     p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
