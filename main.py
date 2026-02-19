@@ -11,7 +11,7 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.5", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v12.6", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
@@ -51,7 +51,6 @@ def enviar_alerta_operacion(asunto, cuerpo, op_id, es_test=False):
             server.quit()
             if not es_test:
                 st.session_state.notificados.append(op_id)
-                if len(st.session_state.notificados) > 100: st.session_state.notificados.pop(0)
             return True
         except: return False
     return False
@@ -86,12 +85,10 @@ df_m, ccl_m = fetch_market()
 HORA_LIMITE_COMPRA = time(16, 30)
 HORA_CIERRE_TOTAL = time(16, 50)
 puedo_comprar = ahora_arg < HORA_LIMITE_COMPRA
-pánico_sell = ahora_arg >= HORA_CIERRE_TOTAL
+panico_sell = ahora_arg >= HORA_CIERRE_TOTAL
 
 # --- CÁLCULOS & TRADING ---
 valor_cedears = 0.0
-posiciones_a_cerrar = list(st.session_state.pos.keys())
-
 for t, info in st.session_state.pos.items():
     p_actual_fila = df_m.loc[df_m['Activo'] == t, 'ARS'].values
     precio_hoy = p_actual_fila[0] if len(p_actual_fila) > 0 and p_actual_fila[0] > 0 else info['p']
@@ -101,25 +98,25 @@ patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 
 if ccl_m:
-    # 1. CIERRE FORZADO (Después de las 16:50)
-    if pánico_sell and st.session_state.pos:
-        for activo in posiciones_a_cerrar:
+    # CIERRE FORZADO 16:50
+    if panico_sell and st.session_state.pos:
+        posiciones_activas = list(st.session_state.pos.keys())
+        for activo in posiciones_activas:
             info_c = st.session_state.pos[activo]
             p_venta = df_m.loc[df_m['Activo'] == activo, 'ARS'].values[0]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * p_venta
             del st.session_state.pos[activo]
-            enviar_alerta_operacion(f"⚠️ CIERRE DIARIO: {activo}", f"Venta automática por límite horario (16:50).\nPrecio: ${p_venta}", f"panic_{activo}_{datetime.now().strftime('%Y%m%d')}")
+            enviar_alerta_operacion(f"⚠️ CIERRE AUTOMÁTICO: {activo}", f"Venta por límite 16:50.\nPrecio: ${p_venta}", f"panic_{activo}_{datetime.now().strftime('%Y%m%d')}")
         guardar_estado()
         st.rerun()
 
-    # 2. TRADING NORMAL
+    # TRADING NORMAL
     for _, row in df_m.iterrows():
         if np.isnan(row['CCL']): continue
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         ts_id = datetime.now().strftime("%Y%m%d_%H%M")
 
-        # COMPRA (Solo si es antes de las 16:30)
         if puedo_comprar and desvio <= -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.08
             if st.session_state.saldo >= monto_t:
@@ -129,8 +126,7 @@ if ccl_m:
                 guardar_estado()
                 st.rerun()
 
-        # VENTA (Normal por desvío, siempre activa hasta las 16:50)
-        elif not pánico_sell and desvio >= 0.005 and activo in st.session_state.pos:
+        elif not panico_sell and desvio >= 0.005 and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * row['ARS']
             del st.session_state.pos[activo]
@@ -138,10 +134,10 @@ if ccl_m:
             guardar_estado()
             st.rerun()
 
-# --- INTERFAZ ---
-st.title("🦅 Simons GG v12.5 🤑")
-estado_mercado = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CIERRE/LIQUIDACIÓN")
-st.subheader(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_mercado}")
+# --- INTERFAZ PRINCIPAL ---
+st.title("🦅 Simons GG v12.6 🤑")
+estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
+st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
@@ -151,16 +147,34 @@ c3.metric("Valor Cedears", f"AR$ {valor_cedears:,.2f}")
 st.divider()
 
 if ccl_m:
+    st.header(f"CCL Promedio: ${ccl_m:,.2f}")
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if puedo_comprar and not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) <= -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) >= 0.005 else "⚖️ MANTENER"), axis=1)
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
-    st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True)
+    st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True, height=500)
 
-# SIDEBAR
-st.sidebar.header("📂 Cartera")
+# --- SIDEBAR DETALLADO (RESTAURADO) ---
+st.sidebar.header("📂 Cartera y Ganancias")
+
 if st.sidebar.button("🧪 Test Mail"):
-    enviar_alerta_operacion("🦅 TEST", "Prueba de conexión", "test", es_test=True)
+    enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba de mail OK", "test", es_test=True)
 
-for t, info in st.session_state.pos.items():
-    with st.sidebar.expander(f"📦 {t}", expanded=True):
-        st.write(f"Inversión: AR$ {info['m']:,.2f}")
+st.sidebar.divider()
+
+if st.session_state.pos:
+    for t, info in st.session_state.pos.items():
+        p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+        p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
+        
+        cant_nom = info['m'] / info['p']
+        valor_hoy = cant_nom * p_act
+        gan_ars = valor_hoy - info['m']
+        gan_pct = ((p_act / info['p']) - 1) * 100
+        color = "green" if gan_ars >= 0 else "red"
+        
+        with st.sidebar.expander(f"📦 {t}", expanded=True):
+            st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
+            st.write(f"Inversión: AR$ {info['m']:,.2f}")
+            st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
+else:
+    st.sidebar.info("Sin posiciones abiertas.")
