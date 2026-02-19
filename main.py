@@ -10,9 +10,8 @@ import os
 from email.message import EmailMessage
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v11.3", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v11.4", page_icon="🦅", layout="wide")
 
-# Tickers completos (14 activos)
 activos_dict = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 
@@ -29,7 +28,7 @@ def cargar_estado():
 if 'saldo' not in st.session_state:
     st.session_state.update(cargar_estado())
 
-# --- LÓGICA DE MERCADO (MEJORADA) ---
+# --- LÓGICA DE MERCADO ---
 @st.cache_data(ttl=60)
 def fetch_full_market():
     datos, ccls = [], []
@@ -39,8 +38,6 @@ def fetch_full_market():
             h_usd = yf.download(t, period="3mo", interval="1d", progress=False)
             h_ars = yf.download(tk_ars, period="1d", interval="1m", progress=False)
             
-            if h_usd.empty or h_ars.empty: raise ValueError()
-            
             p_u, p_a = float(h_usd.Close.iloc[-1]), float(h_ars.Close.iloc[-1])
             ccl = (p_a * r) / p_u
             ccls.append(ccl)
@@ -49,10 +46,9 @@ def fetch_full_market():
             model = GaussianHMM(n_components=3, random_state=42).fit(ret)
             clima = "🟢" if model.predict(ret)[-1] == 0 else "🔴"
             
-            datos.append({"Activo": t, "CCL": ccl, "Clima": clima, "ARS": p_a})
+            datos.append({"Activo": t, "CCL": ccl, "Clima": clima, "ARS": p_a, "USD_Ticker": p_u})
         except:
-            # Si falla, agregamos fila vacía para que no "desaparezca" de la lista
-            datos.append({"Activo": t, "CCL": np.nan, "Clima": "⚪", "ARS": 0})
+            datos.append({"Activo": t, "CCL": np.nan, "Clima": "⚪", "ARS": 0, "USD_Ticker": 0})
     
     df = pd.DataFrame(datos)
     ccl_m = np.nanmedian(ccls) if ccls else None
@@ -60,46 +56,66 @@ def fetch_full_market():
 
 df_m, ccl_m = fetch_full_market()
 
-# --- CÁLCULOS DE CARTERA ---
-valor_cedears = 0.0
-for t, info in st.session_state.pos.items():
-    precio_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
-    if precio_actual == 0: precio_actual = info['p'] # Respaldo
-    valor_cedears += (info['m'] / info['p']) * precio_actual
-
-patrimonio_total = st.session_state.saldo + valor_cedears
-rendimiento = ((patrimonio_total / 30000000.0) - 1) * 100
-
-# --- INTERFAZ ---
-st.title("🦅 Simons GG v11.3")
-c1, c2, c3 = st.columns(3)
-c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento:+.2f}%")
-c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
-c3.metric("Invertido", f"AR$ {valor_cedears:,.2f}")
-
-st.divider()
-
+# --- PROCESAMIENTO DE DATOS ---
 if ccl_m:
-    st.header(f"CCL ${ccl_m:,.2f}")
+    # 1. Calcular Diferencia % (Desvío respecto a la mediana)
+    df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     
-    # Generar Señales
+    # 2. Definir Señal
     def get_signal(r):
         if np.isnan(r['CCL']): return "⌛ S/D"
         desvio = (r['CCL'] / ccl_m) - 1
         if desvio < -0.005 and r['Clima'] == "🟢": return "🟢 COMPRA"
         if desvio > 0.005: return "🔴 VENTA"
         return "⚖️ MANTENER"
-
     df_m['Señal'] = df_m.apply(get_signal, axis=1)
-    
-    # Mostrar TODA la tabla (height=500 asegura que no se corten filas)
-    st.dataframe(df_m, use_container_width=True, hide_index=True, height=530)
-else:
-    st.warning("No se pudieron obtener datos del mercado. Reintentando...")
 
-# SIDEBAR: DETALLE POR ACTIVO
-st.sidebar.header("📂 Cartera Detallada")
+    # 3. Renombrar y Ordenar Columnas según pedido
+    # Activo | % | Clima | Señal | ARS | USD
+    df_m = df_m.rename(columns={"USD_Ticker": "USD", "CCL": "Valor USD"})
+    df_final = df_m[['Activo', '%', 'Clima', 'Señal', 'ARS', 'USD']]
+
+# --- CÁLCULO PATRIMONIO ---
+valor_cedears = 0.0
 for t, info in st.session_state.pos.items():
-    p_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
-    gan_p = ((p_actual / info['p']) - 1) * 100 if p_actual > 0 else 0
-    st.sidebar.write(f"**{t}**: {gan_p:+.2f}%")
+    precio_hoy = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
+    if precio_hoy == 0: precio_hoy = info['p']
+    valor_cedears += (info['m'] / info['p']) * precio_hoy
+
+patrimonio_total = st.session_state.saldo + valor_cedears
+rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
+
+# --- INTERFAZ PRINCIPAL ---
+st.title("🦅 Simons GG v11.4 🤑")
+c1, c2, c3 = st.columns(3)
+c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
+c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
+c3.metric("En Cedears", f"AR$ {valor_cedears:,.2f}")
+
+st.divider()
+if ccl_m:
+    st.header(f"CCL ${ccl_m:,.2f}")
+    st.dataframe(df_final, use_container_width=True, hide_index=True, height=530)
+
+# --- PANEL LATERAL RECARGADO ---
+st.sidebar.header("📂 Cartera Detallada")
+if st.session_state.pos:
+    for t, info in st.session_state.pos.items():
+        # Obtener precio actual para calcular ganancia
+        p_actual = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0]
+        if p_actual == 0: p_actual = info['p']
+        
+        cant_nom = info['m'] / info['p']
+        valor_hoy = cant_nom * p_actual
+        ganancia_ars = valor_hoy - info['m']
+        ganancia_pct = ((p_actual / info['p']) - 1) * 100
+        
+        color = "green" if ganancia_ars >= 0 else "red"
+        
+        with st.sidebar.expander(f"🦅 {t}", expanded=True):
+            st.write(f"**Ganancia:** :{color}[AR$ {ganancia_ars:,.2f} ({ganancia_pct:+.2f}%)]")
+            st.write(f"**Precio Compra:** ${info['p']:,.2f}")
+            st.write(f"**Precio Actual:** ${p_actual:,.2f}")
+            st.caption(f"Inversión inicial: AR$ {info['m']:,.2f}")
+else:
+    st.sidebar.info("No hay activos en cartera.")
