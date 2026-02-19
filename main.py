@@ -10,27 +10,24 @@ import os
 from email.message import EmailMessage
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v11.6", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v11.7", page_icon="🦅", layout="wide")
 
-# Componente de Auto-Refresh (Cada 5 minutos = 300 segundos)
-# Esto reemplaza al "despertador" externo mientras la pestaña esté abierta
-st.empty() 
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = datetime.now()
-
-# Inyectamos un pequeño script para forzar el refresh
-st.markdown(
-    f"""
-    <meta http-equiv="refresh" content="300">
-    """,
-    unsafe_allow_html=True
-)
+# Auto-Refresh cada 5 minutos
+st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 activos_dict = {
     'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 
     'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 
     'AMZN':144, 'META':24, 'VIST':3, 'PAM':25
 }
+
+# --- CREDENCIALES ---
+try:
+    MI_MAIL = st.secrets["MI_MAIL"]
+    CLAVE_APP = st.secrets["CLAVE_APP"]
+except:
+    MI_MAIL = "gustavoaaguiar99@gmail.com"
+    CLAVE_APP = "oshrmhfqzvabekzt"
 
 # --- PERSISTENCIA ---
 ARCHIVO_ESTADO = "simons_state.json"
@@ -46,8 +43,21 @@ def guardar_estado():
 if 'saldo' not in st.session_state:
     st.session_state.update(cargar_estado())
 
-# --- LÓGICA DE MERCADO ---
-@st.cache_data(ttl=290) # Cache levemente inferior al refresh
+def enviar_alerta_mail(asunto, cuerpo):
+    msg = EmailMessage()
+    msg.set_content(cuerpo)
+    msg['Subject'] = asunto
+    msg['From'] = MI_MAIL
+    msg['To'] = MI_MAIL
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(MI_MAIL, CLAVE_APP)
+        server.send_message(msg)
+        server.quit()
+    except: pass
+
+# --- CAPTURA DE MERCADO ---
+@st.cache_data(ttl=290)
 def fetch_full_market():
     datos, ccls = [], []
     for t, r in activos_dict.items():
@@ -70,13 +80,7 @@ def fetch_full_market():
 
 df_m, ccl_m = fetch_full_market()
 
-# --- PROCESAMIENTO TABLA PRINCIPAL ---
-if ccl_m is not None:
-    df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
-    df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
-    df_final = df_m[['Activo', '%', 'Clima', 'Señal', 'ARS', 'USD']]
-
-# --- CÁLCULO PATRIMONIO ---
+# --- CÁLCULO PATRIMONIO DINÁMICO ---
 valor_cedears = 0.0
 for t, info in st.session_state.pos.items():
     p_actual_fila = df_m.loc[df_m['Activo'] == t, 'ARS'].values
@@ -86,8 +90,37 @@ for t, info in st.session_state.pos.items():
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento = ((patrimonio_total / 30000000.0) - 1) * 100
 
+# --- LÓGICA DE EJECUCIÓN (COMPRA/VENTA) ---
+if ccl_m is not None:
+    for _, row in df_m.iterrows():
+        if np.isnan(row['CCL']): continue
+        
+        desvio = (row['CCL'] / ccl_m) - 1
+        activo = row['Activo']
+
+        # COMPRA: Desvío < -0.5% y Clima Verde
+        if desvio < -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
+            monto_t = patrimonio_total * 0.08
+            if st.session_state.saldo >= monto_t:
+                st.session_state.saldo -= monto_t
+                st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS'], 'ccl': row['CCL']}
+                enviar_alerta_mail(f"🦅 COMPRA SIMONS: {activo}", f"Comprado {activo}\nCCL: {row['CCL']:.2f}\nDesvío: {desvio*100:.2f}%")
+                guardar_estado()
+                st.rerun()
+
+        # VENTA: Desvío > +0.5%
+        elif desvio > 0.005 and activo in st.session_state.pos:
+            info_c = st.session_state.pos[activo]
+            monto_final = (info_c['m'] / info_c['p']) * row['ARS']
+            st.session_state.saldo += monto_final
+            ganancia_neta = monto_final - info_c['m']
+            del st.session_state.pos[activo]
+            enviar_alerta_mail(f"🦅 VENTA SIMONS: {activo}", f"Vendido {activo}\nGanancia: AR$ {ganancia_neta:,.2f}\nDesvío: {desvio*100:.2f}%")
+            guardar_estado()
+            st.rerun()
+
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v11.6 🤑")
+st.title("🦅 Simons GG v11.7 🤑")
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento:+.2f}%")
 c2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
@@ -96,23 +129,19 @@ c3.metric("En Cedears", f"AR$ {valor_cedears:,.2f}")
 st.divider()
 if ccl_m:
     st.header(f"CCL ${ccl_m:,.2f}")
-    st.dataframe(df_final, use_container_width=True, hide_index=True, height=530)
-    st.caption(f"Última actualización: {datetime.now().strftime('%H:%M:%S')} (Próximo refresh en 5 min)")
+    df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
+    df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) < -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) > 0.005 else "⚖️ MANTENER"), axis=1)
+    st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'ARS', 'USD']], use_container_width=True, hide_index=True, height=530)
 
-# --- PANEL LATERAL ---
+# PANEL LATERAL
 st.sidebar.header("📂 Cartera Detallada")
-if st.session_state.pos:
-    for t, info in st.session_state.pos.items():
-        p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
-        p_actual = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
-        
-        cant_nom = info['m'] / info['p']
-        valor_hoy = cant_nom * p_actual
-        gan_ars = valor_hoy - info['m']
-        gan_pct = ((p_actual / info['p']) - 1) * 100
-        color = "green" if gan_ars >= 0 else "red"
-        
-        with st.sidebar.expander(f"🦅 {t}", expanded=True):
-            st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
-            st.write(f"**Compra:** ${info['p']:,.2f} | **Actual:** ${p_actual:,.2f}")
-            st.caption(f"Inversión: AR$ {info['m']:,.2f}")
+for t, info in st.session_state.pos.items():
+    p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+    p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
+    valor_h = (info['m'] / info['p']) * p_act
+    gan_a = valor_h - info['m']
+    gan_p = ((p_act / info['p']) - 1) * 100
+    color = "green" if gan_a >= 0 else "red"
+    with st.sidebar.expander(f"🦅 {t}", expanded=True):
+        st.write(f"**Ganancia:** :{color}[AR$ {gan_a:,.2f} ({gan_p:+.2f}%)]")
+        st.write(f"**Compra:** ${info['p']:,.2f} | **Actual:** ${p_act:,.2f}")
