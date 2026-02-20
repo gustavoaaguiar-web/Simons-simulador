@@ -11,31 +11,47 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.6", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v12.7", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 ahora_arg = datetime.now(arg_tz).time()
 
-# --- PERSISTENCIA ---
+# --- PERSISTENCIA CON TUS VALORES ACTUALIZADOS ---
 ARCHIVO_ESTADO = "simons_state.json"
+
 def cargar_estado():
+    # Valores de tu captura (v12.6)
+    estado_inicial = {
+        "saldo": 25846706.35, 
+        "pos": {
+            "GOOGL": {"m": 2668139.50, "p": 7525.0},
+            "VIST": {"m": 2668969.02, "p": 27880.0},
+            "PAM": {"m": 2696591.05, "p": 4700.0},
+            "GGAL": {"m": 2668969.02, "p": 6435.0},
+            "BMA": {"m": 2668969.02, "p": 12200.0}
+        },
+        "notificados": []
+    }
+    
     if os.path.exists(ARCHIVO_ESTADO):
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
-                data = json.load(f)
-                if "notificados" not in data: data["notificados"] = []
-                return data
+                return json.load(f)
         except: pass
-    return {"saldo": 33362112.69, "pos": {}, "notificados": []}
+    return estado_inicial
 
 if 'saldo' not in st.session_state:
     st.session_state.update(cargar_estado())
 
 def guardar_estado():
     with open(ARCHIVO_ESTADO, "w") as f:
-        json.dump({"saldo": st.session_state.saldo, "pos": st.session_state.pos, "notificados": st.session_state.notificados}, f)
+        json.dump({
+            "saldo": st.session_state.saldo, 
+            "pos": st.session_state.pos, 
+            "notificados": st.session_state.notificados
+        }, f)
 
 def enviar_alerta_operacion(asunto, cuerpo, op_id, es_test=False):
     if es_test or op_id not in st.session_state.notificados:
@@ -106,7 +122,7 @@ if ccl_m:
             p_venta = df_m.loc[df_m['Activo'] == activo, 'ARS'].values[0]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * p_venta
             del st.session_state.pos[activo]
-            enviar_alerta_operacion(f"⚠️ CIERRE AUTOMÁTICO: {activo}", f"Venta por límite 16:50.\nPrecio: ${p_venta}", f"panic_{activo}_{datetime.now().strftime('%Y%m%d')}")
+            enviar_alerta_operacion(f"⚠️ CIERRE AUTOMÁTICO: {activo}", f"Venta 16:50.\nPrecio: ${p_venta}", f"panic_{activo}_{datetime.now().strftime('%Y%m%d')}")
         guardar_estado()
         st.rerun()
 
@@ -125,7 +141,6 @@ if ccl_m:
                 enviar_alerta_operacion(f"🦅 COMPRA: {activo}", f"Precio: ${row['ARS']}\nCCL: ${row['CCL']:.2f}", f"buy_{activo}_{ts_id}")
                 guardar_estado()
                 st.rerun()
-
         elif not panico_sell and desvio >= 0.005 and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * row['ARS']
@@ -134,8 +149,8 @@ if ccl_m:
             guardar_estado()
             st.rerun()
 
-# --- INTERFAZ PRINCIPAL ---
-st.title("🦅 Simons GG v12.6 🤑")
+# --- INTERFAZ ---
+st.title("🦅 Simons GG v12.7 🤑")
 estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
 st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
@@ -147,34 +162,25 @@ c3.metric("Valor Cedears", f"AR$ {valor_cedears:,.2f}")
 st.divider()
 
 if ccl_m:
-    st.header(f"CCL Promedio: ${ccl_m:,.2f}")
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if puedo_comprar and not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) <= -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) >= 0.005 else "⚖️ MANTENER"), axis=1)
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
-    st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True, height=500)
+    st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True)
 
-# --- SIDEBAR DETALLADO (RESTAURADO) ---
+# --- SIDEBAR DETALLADO ---
 st.sidebar.header("📂 Cartera y Ganancias")
-
 if st.sidebar.button("🧪 Test Mail"):
-    enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba de mail OK", "test", es_test=True)
+    enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba OK", "test", es_test=True)
 
 st.sidebar.divider()
 
-if st.session_state.pos:
-    for t, info in st.session_state.pos.items():
-        p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
-        p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
-        
-        cant_nom = info['m'] / info['p']
-        valor_hoy = cant_nom * p_act
-        gan_ars = valor_hoy - info['m']
-        gan_pct = ((p_act / info['p']) - 1) * 100
-        color = "green" if gan_ars >= 0 else "red"
-        
-        with st.sidebar.expander(f"📦 {t}", expanded=True):
-            st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
-            st.write(f"Inversión: AR$ {info['m']:,.2f}")
-            st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
-else:
-    st.sidebar.info("Sin posiciones abiertas.")
+for t, info in st.session_state.pos.items():
+    p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+    p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
+    gan_ars = ((info['m'] / info['p']) * p_act) - info['m']
+    gan_pct = ((p_act / info['p']) - 1) * 100
+    color = "green" if gan_ars >= 0 else "red"
+    with st.sidebar.expander(f"📦 {t}", expanded=True):
+        st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
+        st.write(f"Inversión: AR$ {info['m']:,.2f}")
+        st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
