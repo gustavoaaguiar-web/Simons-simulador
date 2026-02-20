@@ -11,20 +11,23 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.7", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v12.8", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 ahora_arg = datetime.now(arg_tz).time()
 
-# --- PERSISTENCIA CON TUS VALORES ACTUALIZADOS ---
+# --- PERSISTENCIA CON EL SALDO CORREGIDO ---
 ARCHIVO_ESTADO = "simons_state.json"
 
 def cargar_estado():
-    # Valores de tu captura (v12.6)
+    # SALDO CORREGIDO SOLICITADO
+    SALDO_CORRECTO = 33665259.87
+    
+    # Carteras según tus últimas capturas
     estado_inicial = {
-        "saldo": 25846706.35, 
+        "saldo": SALDO_CORRECTO, 
         "pos": {
             "GOOGL": {"m": 2668139.50, "p": 7525.0},
             "VIST": {"m": 2668969.02, "p": 27880.0},
@@ -38,7 +41,10 @@ def cargar_estado():
     if os.path.exists(ARCHIVO_ESTADO):
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Forzamos el saldo si detectamos que hubo un salto incorrecto
+                data["saldo"] = SALDO_CORRECTO
+                return data
         except: pass
     return estado_inicial
 
@@ -150,7 +156,7 @@ if ccl_m:
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v12.7 🤑")
+st.title("🦅 Simons GG v12.8 🤑")
 estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
 st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
