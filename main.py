@@ -11,32 +11,23 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.9", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v13.0", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 ahora_arg = datetime.now(arg_tz).time()
 
-# --- PERSISTENCIA CON EL SALDO DE CIERRE ---
+# --- PERSISTENCIA ---
 ARCHIVO_ESTADO = "simons_state.json"
 
 def cargar_estado():
-    # SALDO EXACTO SEGÚN CAPTURA v12.8
     SALDO_OBJETIVO = 33665259.87
-    
-    estado_inicial = {
-        "saldo": SALDO_OBJETIVO, 
-        "pos": {}, # Se inicia vacío porque el Valor Cedears en captura es 0.00
-        "notificados": []
-    }
-    
+    estado_inicial = {"saldo": SALDO_OBJETIVO, "pos": {}, "notificados": []}
     if os.path.exists(ARCHIVO_ESTADO):
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
                 data = json.load(f)
-                # Forzamos la corrección del salto
-                data["saldo"] = SALDO_OBJETIVO
                 return data
         except: pass
     return estado_inicial
@@ -124,7 +115,7 @@ if ccl_m:
         guardar_estado()
         st.rerun()
 
-    # TRADING NORMAL
+    # TRADING NORMAL AUTOMÁTICO
     for _, row in df_m.iterrows():
         if np.isnan(row['CCL']): continue
         desvio = (row['CCL'] / ccl_m) - 1
@@ -148,7 +139,7 @@ if ccl_m:
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v12.9 🤑")
+st.title("🦅 Simons GG v13.0 🤑")
 estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
 st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
@@ -165,22 +156,34 @@ if ccl_m:
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
     st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True)
 
-# --- SIDEBAR ---
+# --- SIDEBAR CON VENTA MANUAL ---
 st.sidebar.header("📂 Cartera y Ganancias")
 if st.sidebar.button("🧪 Test Mail"):
     enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba OK", "test", es_test=True)
 
 st.sidebar.divider()
+
 if st.session_state.pos:
-    for t, info in st.session_state.pos.items():
-        p_act = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0] if t in df_m['Activo'].values else info['p']
-        gan_ars = ((info['m'] / info['p']) * p_act) - info['m']
+    for t, info in list(st.session_state.pos.items()):
+        p_act_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
+        p_act = p_act_arr[0] if len(p_act_arr) > 0 and p_act_arr[0] > 0 else info['p']
+        
+        nominales = info['m'] / info['p']
+        valor_actual = nominales * p_act
+        gan_ars = valor_actual - info['m']
         gan_pct = ((p_act / info['p']) - 1) * 100
         color = "green" if gan_ars >= 0 else "red"
+        
         with st.sidebar.expander(f"📦 {t}", expanded=True):
             st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
-            st.write(f"Inversión: AR$ {info['m']:,.2f}")
             st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
-else:
-    st.sidebar.info("Cartera vacía (Liquidez total)")
             
+            # BOTÓN DE VENTA MANUAL
+            if st.button(f"🔴 Vender {t}", key=f"btn_sell_{t}"):
+                st.session_state.saldo += valor_actual
+                del st.session_state.pos[t]
+                enviar_alerta_operacion(f"✋ VENTA MANUAL: {t}", f"Vendiste {t} manualmente.\nPrecio: ${p_act}\nResultado: {gan_pct:+.2f}%", f"manual_{t}_{datetime.now().timestamp()}")
+                guardar_estado()
+                st.rerun()
+else:
+    st.sidebar.info("Cartera vacía.")
