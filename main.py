@@ -11,30 +11,23 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v12.8", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v12.9", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 ahora_arg = datetime.now(arg_tz).time()
 
-# --- PERSISTENCIA CON EL SALDO CORREGIDO ---
+# --- PERSISTENCIA CON EL SALDO DE CIERRE ---
 ARCHIVO_ESTADO = "simons_state.json"
 
 def cargar_estado():
-    # SALDO CORREGIDO SOLICITADO
-    SALDO_CORRECTO = 33665259.87
+    # SALDO EXACTO SEGÚN CAPTURA v12.8
+    SALDO_OBJETIVO = 33665259.87
     
-    # Carteras según tus últimas capturas
     estado_inicial = {
-        "saldo": SALDO_CORRECTO, 
-        "pos": {
-            "GOOGL": {"m": 2668139.50, "p": 7525.0},
-            "VIST": {"m": 2668969.02, "p": 27880.0},
-            "PAM": {"m": 2696591.05, "p": 4700.0},
-            "GGAL": {"m": 2668969.02, "p": 6435.0},
-            "BMA": {"m": 2668969.02, "p": 12200.0}
-        },
+        "saldo": SALDO_OBJETIVO, 
+        "pos": {}, # Se inicia vacío porque el Valor Cedears en captura es 0.00
         "notificados": []
     }
     
@@ -42,8 +35,8 @@ def cargar_estado():
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
                 data = json.load(f)
-                # Forzamos el saldo si detectamos que hubo un salto incorrecto
-                data["saldo"] = SALDO_CORRECTO
+                # Forzamos la corrección del salto
+                data["saldo"] = SALDO_OBJETIVO
                 return data
         except: pass
     return estado_inicial
@@ -122,13 +115,12 @@ rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 if ccl_m:
     # CIERRE FORZADO 16:50
     if panico_sell and st.session_state.pos:
-        posiciones_activas = list(st.session_state.pos.keys())
-        for activo in posiciones_activas:
+        for activo in list(st.session_state.pos.keys()):
             info_c = st.session_state.pos[activo]
             p_venta = df_m.loc[df_m['Activo'] == activo, 'ARS'].values[0]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * p_venta
             del st.session_state.pos[activo]
-            enviar_alerta_operacion(f"⚠️ CIERRE AUTOMÁTICO: {activo}", f"Venta 16:50.\nPrecio: ${p_venta}", f"panic_{activo}_{datetime.now().strftime('%Y%m%d')}")
+            enviar_alerta_operacion(f"⚠️ CIERRE AUTOMÁTICO: {activo}", f"Venta 16:50.\nPrecio: ${p_venta}", f"panic_{activo}")
         guardar_estado()
         st.rerun()
 
@@ -156,7 +148,7 @@ if ccl_m:
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v12.8 🤑")
+st.title("🦅 Simons GG v12.9 🤑")
 estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
 st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
@@ -173,20 +165,22 @@ if ccl_m:
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
     st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True)
 
-# --- SIDEBAR DETALLADO ---
+# --- SIDEBAR ---
 st.sidebar.header("📂 Cartera y Ganancias")
 if st.sidebar.button("🧪 Test Mail"):
     enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba OK", "test", es_test=True)
 
 st.sidebar.divider()
-
-for t, info in st.session_state.pos.items():
-    p_actual_arr = df_m.loc[df_m['Activo'] == t, 'ARS'].values
-    p_act = p_actual_arr[0] if len(p_actual_arr) > 0 and p_actual_arr[0] > 0 else info['p']
-    gan_ars = ((info['m'] / info['p']) * p_act) - info['m']
-    gan_pct = ((p_act / info['p']) - 1) * 100
-    color = "green" if gan_ars >= 0 else "red"
-    with st.sidebar.expander(f"📦 {t}", expanded=True):
-        st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
-        st.write(f"Inversión: AR$ {info['m']:,.2f}")
-        st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
+if st.session_state.pos:
+    for t, info in st.session_state.pos.items():
+        p_act = df_m.loc[df_m['Activo'] == t, 'ARS'].values[0] if t in df_m['Activo'].values else info['p']
+        gan_ars = ((info['m'] / info['p']) * p_act) - info['m']
+        gan_pct = ((p_act / info['p']) - 1) * 100
+        color = "green" if gan_ars >= 0 else "red"
+        with st.sidebar.expander(f"📦 {t}", expanded=True):
+            st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
+            st.write(f"Inversión: AR$ {info['m']:,.2f}")
+            st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
+else:
+    st.sidebar.info("Cartera vacía (Liquidez total)")
+            
