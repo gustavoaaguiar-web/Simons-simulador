@@ -3,7 +3,7 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import smtplib
 import json
 import os
@@ -11,12 +11,14 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v13.0", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v13.1", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
-ahora_arg = datetime.now(arg_tz).time()
+ahora_arg_dt = datetime.now(arg_tz)
+ahora_arg_time = ahora_arg_dt.time()
+dia_semana = ahora_arg_dt.weekday() # 0=Lunes, 4=Viernes, 5=Sábado, 6=Domingo
 
 # --- PERSISTENCIA ---
 ARCHIVO_ESTADO = "simons_state.json"
@@ -61,11 +63,25 @@ def enviar_alerta_operacion(asunto, cuerpo, op_id, es_test=False):
         except: return False
     return False
 
+# --- LÓGICA DE MERCADO ABIERTO/CERRADO ---
+# Abierto de Lunes (0) a Viernes (4)
+# Entre las 11:30 y las 16:50
+# El resto del tiempo: CERRADO
+es_dia_habil = dia_semana >= 0 and dia_semana <= 4
+hora_apertura = time(11, 30)
+hora_limite_compra = time(16, 30)
+hora_cierre_total = time(16, 50)
+
+mercado_abierto = es_dia_habil and (ahora_arg_time >= hora_apertura and ahora_arg_time < hora_cierre_total)
+puedo_comprar = es_dia_habil and (ahora_arg_time >= hora_apertura and ahora_arg_time < hora_limite_compra)
+panico_sell = es_dia_habil and (ahora_arg_time >= hora_cierre_total)
+
 # --- CAPTURA DE MERCADO ---
 activos_dict = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25}
 
 @st.cache_data(ttl=290)
 def fetch_market():
+    # Si es fin de semana, devolvemos datos vacíos o estáticos para no gastar llamadas a API innecesariamente
     datos, ccls = [], []
     for t, r in activos_dict.items():
         try:
@@ -87,12 +103,6 @@ def fetch_market():
 
 df_m, ccl_m = fetch_market()
 
-# --- LÓGICA HORARIA ---
-HORA_LIMITE_COMPRA = time(16, 30)
-HORA_CIERRE_TOTAL = time(16, 50)
-puedo_comprar = ahora_arg < HORA_LIMITE_COMPRA
-panico_sell = ahora_arg >= HORA_CIERRE_TOTAL
-
 # --- CÁLCULOS & TRADING ---
 valor_cedears = 0.0
 for t, info in st.session_state.pos.items():
@@ -103,8 +113,8 @@ for t, info in st.session_state.pos.items():
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 
-if ccl_m:
-    # CIERRE FORZADO 16:50
+if ccl_m and mercado_abierto:
+    # CIERRE FORZADO 16:50 (Viernes o cualquier día hábil)
     if panico_sell and st.session_state.pos:
         for activo in list(st.session_state.pos.keys()):
             info_c = st.session_state.pos[activo]
@@ -130,7 +140,7 @@ if ccl_m:
                 enviar_alerta_operacion(f"🦅 COMPRA: {activo}", f"Precio: ${row['ARS']}\nCCL: ${row['CCL']:.2f}", f"buy_{activo}_{ts_id}")
                 guardar_estado()
                 st.rerun()
-        elif not panico_sell and desvio >= 0.005 and activo in st.session_state.pos:
+        elif desvio >= 0.005 and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             st.session_state.saldo += (info_c['m'] / info_c['p']) * row['ARS']
             del st.session_state.pos[activo]
@@ -139,9 +149,21 @@ if ccl_m:
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v13.0 🤑")
-estado_txt = "🟢 OPERANDO" if puedo_comprar else ("🟡 SOLO VENTAS" if ahora_arg < HORA_CIERRE_TOTAL else "🔴 CERRADO")
-st.caption(f"Hora ARG: {ahora_arg.strftime('%H:%M:%S')} | Estado: {estado_txt}")
+st.title("🦅 Simons GG v13.1 🤑")
+
+# Definición visual del estado
+if not es_dia_habil:
+    estado_txt = "🔴 CERRADO (Fin de Semana)"
+elif ahora_arg_time < hora_apertura:
+    estado_txt = "🔴 CERRADO (Pre-mercado)"
+elif ahora_arg_time >= hora_cierre_total:
+    estado_txt = "🔴 CERRADO (Post-mercado)"
+elif ahora_arg_time >= hora_limite_compra:
+    estado_txt = "🟡 SOLO VENTAS"
+else:
+    estado_txt = "🟢 OPERANDO"
+
+st.caption(f"Hora ARG: {ahora_arg_time.strftime('%H:%M:%S')} | Estado: {estado_txt}")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Patrimonio Total", f"AR$ {patrimonio_total:,.2f}", f"{rendimiento_total:+.2f}%")
@@ -152,11 +174,20 @@ st.divider()
 
 if ccl_m:
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
-    df_m['Señal'] = df_m.apply(lambda r: "🟢 COMPRA" if puedo_comprar and not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) <= -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if not np.isnan(r['CCL']) and ((r['CCL']/ccl_m)-1) >= 0.005 else "⚖️ MANTENER"), axis=1)
+    # Señal visual respetando el horario
+    def obtener_senal(r):
+        if not puedo_comprar: return "🔒 MERCADO CERRADO"
+        if np.isnan(r['CCL']): return "⚪ SIN DATOS"
+        desvio = (r['CCL']/ccl_m)-1
+        if desvio <= -0.005 and r['Clima'] == "🟢": return "🟢 COMPRA"
+        if desvio >= 0.005: return "🔴 VENTA"
+        return "⚖️ MANTENER"
+
+    df_m['Señal'] = df_m.apply(obtener_senal, axis=1)
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
     st.dataframe(df_m[['Activo', '%', 'Clima', 'Señal', 'CCL_Display', 'ARS', 'USD']], use_container_width=True, hide_index=True)
 
-# --- SIDEBAR CON VENTA MANUAL ---
+# --- SIDEBAR ---
 st.sidebar.header("📂 Cartera y Ganancias")
 if st.sidebar.button("🧪 Test Mail"):
     enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba OK", "test", es_test=True)
@@ -178,12 +209,13 @@ if st.session_state.pos:
             st.write(f"**Ganancia:** :{color}[AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)]")
             st.write(f"Entrada: `${info['p']:,.2f}` | Actual: `${p_act:,.2f}`")
             
-            # BOTÓN DE VENTA MANUAL
+            # El botón de venta manual funciona siempre, incluso en mercado cerrado (por si querés ajustar algo)
             if st.button(f"🔴 Vender {t}", key=f"btn_sell_{t}"):
                 st.session_state.saldo += valor_actual
                 del st.session_state.pos[t]
-                enviar_alerta_operacion(f"✋ VENTA MANUAL: {t}", f"Vendiste {t} manualmente.\nPrecio: ${p_act}\nResultado: {gan_pct:+.2f}%", f"manual_{t}_{datetime.now().timestamp()}")
+                enviar_alerta_operacion(f"✋ VENTA MANUAL: {t}", f"Vendiste {t} manualmente.\nPrecio: ${p_act}", f"manual_{t}")
                 guardar_estado()
                 st.rerun()
 else:
-    st.sidebar.info("Cartera vacía.")
+    st.sidebar.info("Cartera vacía (Liquidez total)")
+    
