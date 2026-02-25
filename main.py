@@ -11,25 +11,30 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v13.2", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v13.3", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
 arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
 ahora_arg_dt = datetime.now(arg_tz)
 ahora_arg_time = ahora_arg_dt.time()
-dia_semana = ahora_arg_dt.weekday() # 0=Lunes
+dia_semana = ahora_arg_dt.weekday()
 
 # --- PERSISTENCIA ---
 ARCHIVO_ESTADO = "simons_state.json"
 
 def cargar_estado():
-    SALDO_OBJETIVO = 33665259.87
+    # SALDO CORREGIDO SEGÚN ÚLTIMA CAPTURA v13.2
+    SALDO_OBJETIVO = 33866165.28
     estado_inicial = {"saldo": SALDO_OBJETIVO, "pos": {}, "notificados": []}
+    
     if os.path.exists(ARCHIVO_ESTADO):
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Forzamos la corrección del total tras el reinicio
+                data["saldo"] = SALDO_OBJETIVO
+                return data
         except: pass
     return estado_inicial
 
@@ -62,13 +67,12 @@ def enviar_alerta_operacion(asunto, cuerpo, op_id, es_test=False):
         except: return False
     return False
 
-# --- LÓGICA DE HORARIOS (NUEVO: 11:00 AM) ---
+# --- LÓGICA DE HORARIOS ---
 es_dia_habil = dia_semana >= 0 and dia_semana <= 4
 hora_apertura = time(11, 0)
 hora_limite_compra = time(16, 30)
 hora_cierre_total = time(16, 50)
 
-# El bot solo opera automáticamente en estos rangos
 mercado_abierto = es_dia_habil and (ahora_arg_time >= hora_apertura and ahora_arg_time < hora_cierre_total)
 puedo_comprar_auto = es_dia_habil and (ahora_arg_time >= hora_apertura and ahora_arg_time < hora_limite_compra)
 panico_sell = es_dia_habil and (ahora_arg_time >= hora_cierre_total)
@@ -109,7 +113,6 @@ for t, info in st.session_state.pos.items():
 patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 
-# Ejecución automática solo si el mercado está abierto
 if ccl_m and mercado_abierto:
     if panico_sell and st.session_state.pos:
         for activo in list(st.session_state.pos.keys()):
@@ -126,7 +129,8 @@ if ccl_m and mercado_abierto:
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         if puedo_comprar_auto and desvio <= -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
-            monto_t = patrimonio_total * 0.08
+            # CAMBIO: 12.50% por operación
+            monto_t = patrimonio_total * 0.125
             if st.session_state.saldo >= monto_t:
                 st.session_state.saldo -= monto_t
                 st.session_state.pos[activo] = {'m': monto_t, 'p': row['ARS']}
@@ -142,9 +146,8 @@ if ccl_m and mercado_abierto:
             st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v13.2 🤑")
+st.title("🦅 Simons GG v13.3 🤑")
 
-# Estado visual
 if not es_dia_habil:
     estado_txt = "🔴 MANTENIMIENTO (Fin de Semana)"
 elif ahora_arg_time < hora_apertura:
@@ -166,7 +169,6 @@ st.divider()
 if ccl_m:
     df_m['%'] = df_m['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if not np.isnan(x) else "S/D")
     
-    # SEÑAL VISUAL: Siempre activa para análisis, aunque no ejecute
     def obtener_senal(r):
         if np.isnan(r['CCL']): return "⚪ SIN DATOS"
         desvio = (r['CCL']/ccl_m)-1
@@ -177,7 +179,6 @@ if ccl_m:
     df_m['Señal'] = df_m.apply(obtener_senal, axis=1)
     df_m['CCL_Display'] = df_m['CCL'].map(lambda x: f"${x:,.2f}")
     
-    # Resaltar si estamos fuera de hora de ejecución
     if not mercado_abierto:
         st.warning("⚠️ Modo Consulta: Las señales son informativas. El bot no ejecutará órdenes hasta el horario de mercado.")
         
@@ -185,6 +186,7 @@ if ccl_m:
 
 # --- SIDEBAR ---
 st.sidebar.header("📂 Cartera y Ganancias")
+st.sidebar.write(f"**Exposición por op:** 12.50%")
 if st.sidebar.button("🧪 Test Mail"):
     enviar_alerta_operacion("🦅 TEST SIMONS", "Prueba OK", "test", es_test=True)
 
