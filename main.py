@@ -220,4 +220,3 @@ if st.session_state.pos:
                 st.rerun()
 else:
     st.sidebar.info("Cartera vacía.")
-            
