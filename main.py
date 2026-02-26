@@ -11,7 +11,7 @@ from email.message import EmailMessage
 import pytz
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v13.4", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v13.5", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # Configuración de Zona Horaria Argentina
@@ -24,15 +24,15 @@ dia_semana = ahora_arg_dt.weekday()
 ARCHIVO_ESTADO = "simons_state.json"
 
 def cargar_estado():
-    # NUEVO TOTAL SOLICITADO
-    SALDO_OBJETIVO = 34084035.34
+    # NUEVO IMPORTE CORREGIDO
+    SALDO_OBJETIVO = 34090691.70
     estado_inicial = {"saldo": SALDO_OBJETIVO, "pos": {}, "notificados": []}
     
     if os.path.exists(ARCHIVO_ESTADO):
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
                 data = json.load(f)
-                data["saldo"] = SALDO_OBJETIVO # Forzamos actualización de saldo
+                data["saldo"] = SALDO_OBJETIVO # Ajuste de saldo manual
                 return data
         except: pass
     return estado_inicial
@@ -113,34 +113,29 @@ patrimonio_total = st.session_state.saldo + valor_cedears
 rendimiento_total = ((patrimonio_total / 30000000.0) - 1) * 100
 
 if ccl_m and mercado_abierto:
-    # Lógica de venta automática
     for _, row in df_m.iterrows():
         if np.isnan(row['CCL']): continue
         desvio = (row['CCL'] / ccl_m) - 1
         activo = row['Activo']
         
-        # CONDICIÓN DE VENTA (Normal o Pánico)
+        # VENTA (Normal o Pánico)
         if (desvio >= 0.005 or panico_sell) and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             precio_venta = row['ARS']
             valor_final = (info_c['m'] / info_c['p']) * precio_venta
-            diferencia_ars = valor_final - info_c['m']
-            diferencia_pct = ((precio_venta / info_c['p']) - 1) * 100
+            dif_ars = valor_final - info_c['m']
+            dif_pct = ((precio_venta / info_c['p']) - 1) * 100
             
             st.session_state.saldo += valor_final
             del st.session_state.pos[activo]
             
-            tipo_v = "CIERRE 16:50" if panico_sell else "VENTA"
-            enviar_alerta_operacion(
-                f"🦅 {tipo_v}: {activo}", 
-                f"Precio: ${precio_venta:,.2f}\n"
-                f"Resultado: AR$ {diferencia_ars:,.2f} ({diferencia_pct:+.2f}%)", 
-                f"sell_{activo}_{datetime.now().strftime('%H%M')}"
-            )
+            asunto = f"🦅 {'CIERRE 16:50' if panico_sell else 'VENTA'}: {activo}"
+            cuerpo = f"Precio: ${precio_venta:,.2f}\nResultado: AR$ {dif_ars:,.2f} ({dif_pct:+.2f}%)"
+            enviar_alerta_operacion(asunto, cuerpo, f"sell_{activo}_{datetime.now().strftime('%H%M')}")
             guardar_estado()
             st.rerun()
 
-        # CONDICIÓN DE COMPRA
+        # COMPRA
         if puedo_comprar_auto and desvio <= -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
             monto_t = patrimonio_total * 0.125
             if st.session_state.saldo >= monto_t:
@@ -151,8 +146,8 @@ if ccl_m and mercado_abierto:
                 st.rerun()
 
 # --- INTERFAZ ---
-st.title("🦅 Simons GG v13.4 🤑")
-if not es_dia_habil: estado_txt = "🔴 MANTENIMIENTO (Fin de Semana)"
+st.title("🦅 Simons GG v13.5 🤑")
+if not es_dia_habil: estado_txt = "🔴 FIN DE SEMANA"
 elif ahora_arg_time < hora_apertura: estado_txt = f"🔴 CERRADO (Abre 11:00)"
 elif ahora_arg_time >= hora_cierre_total: estado_txt = "🔴 CERRADO (Post-mercado)"
 else: estado_txt = "🟢 OPERANDO"
@@ -175,7 +170,7 @@ if ccl_m:
 
 # --- SIDEBAR ---
 st.sidebar.header("📂 Cartera")
-st.sidebar.write(f"**Exposición:** 12.50%")
+st.sidebar.write(f"**Monto por op:** 12.50%")
 
 if st.session_state.pos:
     for t, info in list(st.session_state.pos.items()):
@@ -187,11 +182,12 @@ if st.session_state.pos:
         
         with st.sidebar.expander(f"📦 {t}", expanded=True):
             st.write(f"**Ganancia:** AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)")
-            if st.button(f"🔴 Vender {t}", key=f"manual_{t}"):
+            if st.button(f"🔴 Vender {t}", key=f"man_{t}"):
                 st.session_state.saldo += val_act
                 del st.session_state.pos[t]
-                enviar_alerta_operacion(f"✋ VENTA MANUAL: {t}", f"Precio: ${p_act:,.2f}\nResultado: AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)", f"man_{t}")
+                enviar_alerta_operacion(f"✋ VENTA MANUAL: {t}", f"Resultado: AR$ {gan_ars:,.2f} ({gan_pct:+.2f}%)", f"m_{t}")
                 guardar_estado()
                 st.rerun()
 else:
     st.sidebar.info("Cartera vacía.")
+            
