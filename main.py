@@ -12,7 +12,7 @@ import pytz
 import time as time_lib
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v14.3", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v14.4", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
 # 1. ZONA HORARIA
@@ -34,7 +34,6 @@ def cargar_estado():
         try:
             with open(ARCHIVO_ESTADO, "r") as f:
                 data = json.load(f)
-                if not data.get("pos"): data["saldo"] = SALDO_OBJETIVO
                 return data
         except: pass
     return {"saldo": SALDO_OBJETIVO, "pos": {}, "notificados": []}
@@ -46,11 +45,11 @@ def guardar_estado():
     with open(ARCHIVO_ESTADO, "w") as f:
         json.dump({k: st.session_state[k] for k in ["saldo", "pos", "notificados"]}, f)
 
-# 3. CAPTURA DE MERCADO (Ultra Safe con Triple Reintento)
+# 3. CAPTURA DE MERCADO (Ultra Safe)
 activos_dict = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25}
 
 @st.cache_data(ttl=290)
-def fetch_market_v14_3():
+def fetch_market_v14_4():
     datos, ccls = [], []
     for t, r in activos_dict.items():
         exito = False
@@ -59,7 +58,6 @@ def fetch_market_v14_3():
                 tk_ars = "YPFD.BA" if t=='YPF' else ("PAMP.BA" if t=='PAM' else f"{t}.BA")
                 h_usd = yf.download(t, period="3mo", interval="1d", progress=False, timeout=15)
                 h_ars = yf.download(tk_ars, period="1d", interval="1m", progress=False, timeout=15)
-                
                 if not h_usd.empty and not h_ars.empty:
                     p_u, p_a = float(h_usd.Close.iloc[-1]), float(h_ars.Close.iloc[-1])
                     ccl_i = (p_a * r) / p_u
@@ -69,19 +67,15 @@ def fetch_market_v14_3():
                     datos.append({"Activo": t, "CCL": ccl_i, "Clima": clima, "ARS": p_a, "USD": p_u})
                     exito = True
                     break
-            except:
-                time_lib.sleep(1)
-        
-        if not exito:
-            datos.append({"Activo": t, "CCL": np.nan, "Clima": "⚪", "ARS": 0, "USD": 0})
-            
+            except: time_lib.sleep(1)
+        if not exito: datos.append({"Activo": t, "CCL": np.nan, "Clima": "⚪", "ARS": 0, "USD": 0})
     df = pd.DataFrame(datos)
     mediana = np.nanmedian(ccls) if ccls else None
     return df, mediana
 
-df_m, ccl_m = fetch_market_v14_3()
+df_m, ccl_m = fetch_market_v14_4()
 
-# 4. CÁLCULOS
+# 4. LÓGICA DE TRADING MEJORADA (COMPRA FLEXIBLE)
 valor_cedears = 0.0
 for t, info in st.session_state.pos.items():
     p_act = df_m.loc[df_m['Activo'] == t, 'ARS'].values
@@ -89,47 +83,68 @@ for t, info in st.session_state.pos.items():
     valor_cedears += (info['m'] / info['p']) * precio
 
 patrimonio = st.session_state.saldo + valor_cedears
-rendimiento = ((patrimonio / 30000000.0) - 1) * 100
+es_hora_operativa = (0 <= dia_semana <= 4 and time(11,0) <= ahora_arg_time < time(16,30))
+
+if ccl_m and es_hora_operativa:
+    for _, row in df_m.iterrows():
+        if np.isnan(row['CCL']): continue
+        desvio = (row['CCL'] / ccl_m) - 1
+        activo = row['Activo']
+        
+        # LÓGICA DE COMPRA (Si hay señal y no lo tenemos)
+        if desvio <= -0.005 and row['Clima'] == "🟢" and activo not in st.session_state.pos:
+            monto_ideal = patrimonio * 0.125
+            # Si el saldo es menor al ideal pero tenemos al menos el 80% del monto ideal, compramos igual
+            monto_a_usar = min(st.session_state.saldo, monto_ideal)
+            
+            if monto_a_usar > 100000: # Mínimo para que valga la pena la comisión
+                st.session_state.saldo -= monto_a_usar
+                st.session_state.pos[activo] = {'m': monto_a_usar, 'p': row['ARS']}
+                guardar_estado()
+                st.rerun()
+
+        # LÓGICA DE VENTA (Si hay ganancia por desvío)
+        if desvio >= 0.005 and activo in st.session_state.pos:
+            info_c = st.session_state.pos[activo]
+            st.session_state.saldo += (info_c['m'] / info_c['p']) * row['ARS']
+            del st.session_state.pos[activo]
+            guardar_estado()
+            st.rerun()
 
 # 5. UI PRINCIPAL
-st.title("🦅 Simons GG v14.3 🤑")
-status = "🟢 OPERANDO" if (0 <= dia_semana <= 4 and time(11,0) <= ahora_arg_time < time(16,50)) else "🔴 CERRADO"
+st.title("🦅 Simons GG v14.4 🤑")
+status = "🟢 OPERANDO" if es_hora_operativa else "🔴 MODO CONSULTA"
 st.caption(f"Actualizado: {ahora_arg_dt.strftime('%H:%M:%S')} | {status}")
 
 m1, m2, m3 = st.columns(3)
-m1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}", f"{rendimiento:+.2f}%")
-m2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
+m1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}")
+m2.metric("Efectivo Disponible", f"AR$ {st.session_state.saldo:,.2f}")
 m3.metric("En CEDEARs", f"AR$ {valor_cedears:,.2f}")
 
 st.divider()
 
-# TABLA CON COLUMNAS SOLICITADAS A LA DERECHA
 if not df_m.empty and ccl_m:
     df_vis = df_m.copy()
-    df_vis['% Desv'] = df_vis['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if pd.notnull(x) else "ERR")
+    df_vis['% Desv'] = df_vis['CCL'].apply(lambda x: f"{((x/ccl_m)-1)*100:+.2f}%" if pd.notnull(x) else "---")
     df_vis['Señal'] = df_vis.apply(lambda r: "🟢 COMPRA" if pd.notnull(r['CCL']) and ((r['CCL']/ccl_m)-1) <= -0.005 and r['Clima'] == "🟢" else ("🔴 VENTA" if pd.notnull(r['CCL']) and ((r['CCL']/ccl_m)-1) >= 0.005 else "⚖️ MANTENER"), axis=1)
-    
-    # Formateo de las nuevas columnas
     df_vis['USD_f'] = df_vis['USD'].map(lambda x: f"${x:,.2f}")
-    df_vis['CCL_f'] = df_vis['CCL'].map(lambda x: f"${x:,.2f}" if pd.notnull(x) else "---")
+    df_vis['CCL_f'] = df_vis['CCL'].map(lambda x: f"${x:,.2f}")
     
-    # Reordenar: Activo, % Desv, Clima, Señal, ARS, USD (nueva), CCL (nueva)
-    columnas_finales = ['Activo', '% Desv', 'Clima', 'Señal', 'ARS', 'USD_f', 'CCL_f']
-    st.dataframe(df_vis[columnas_finales].rename(columns={'USD_f': 'USD', 'CCL_f': 'CCL Impl.'}), use_container_width=True, hide_index=True)
+    st.dataframe(df_vis[['Activo', '% Desv', 'Clima', 'Señal', 'ARS', 'USD_f', 'CCL_f']].rename(columns={'USD_f': 'USD', 'CCL_f': 'CCL Impl.'}), use_container_width=True, hide_index=True)
 
 # 6. SIDEBAR
 with st.sidebar:
-    st.header("📂 Cartera")
+    st.header("📂 Cartera Activa")
     if st.session_state.pos:
         for t, info in list(st.session_state.pos.items()):
             with st.expander(f"📦 {t}", expanded=True):
                 p_v = df_m.loc[df_m['Activo']==t, 'ARS'].values[0] if t in df_m['Activo'].values else info['p']
-                gan_ars = ((info['m']/info['p']) * p_v) - info['m']
-                st.write(f"Ganancia: AR$ {gan_ars:,.2f}")
+                val_actual = (info['m'] / info['p']) * p_v
+                st.write(f"Valor: AR$ {val_actual:,.2f}")
                 if st.button(f"Vender {t}", key=f"v_{t}"):
-                    st.session_state.saldo += (info['m']/info['p']) * p_v
+                    st.session_state.saldo += val_actual
                     del st.session_state.pos[t]
                     guardar_estado()
                     st.rerun()
     else:
-        st.info("Cartera vacía.")
+        st.info("Buscando oportunidades...")
