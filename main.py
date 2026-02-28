@@ -12,10 +12,10 @@ import pytz
 import time as time_lib
 
 # --- CONFIGURACIÓN APP ---
-st.set_page_config(page_title="Simons GG v14.5", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Simons GG v14.6", page_icon="🦅", layout="wide")
 st.markdown("<meta http-equiv='refresh' content='300'>", unsafe_allow_html=True)
 
-# 1. ZONA HORARIA
+# 1. ZONA HORARIA Y ESTADO
 try:
     arg_tz = pytz.timezone('America/Argentina/Buenos_Aires')
     ahora_arg_dt = datetime.now(arg_tz)
@@ -25,9 +25,10 @@ except:
 ahora_arg_time = ahora_arg_dt.time()
 dia_semana = ahora_arg_dt.weekday()
 
-# 2. PERSISTENCIA
+# 2. PERSISTENCIA Y SALDO
 ARCHIVO_ESTADO = "simons_state.json"
-SALDO_OBJETIVO = 34130883.81
+SALDO_INICIAL_SISTEMA = 30000000.0  # Base para el cálculo del % de aumento total
+SALDO_OBJETIVO = 34456041.58
 
 def cargar_estado():
     if os.path.exists(ARCHIVO_ESTADO):
@@ -44,7 +45,7 @@ def guardar_estado():
     with open(ARCHIVO_ESTADO, "w") as f:
         json.dump({k: st.session_state[k] for k in ["saldo", "pos", "notificados"]}, f)
 
-# 3. COMUNICACIONES (MAIL)
+# 3. COMUNICACIONES (MAIL CON % DE DIFERENCIA)
 def enviar_alerta(asunto, cuerpo, op_id, es_test=False):
     if es_test or op_id not in st.session_state.notificados:
         MI_MAIL, CLAVE = "gustavoaaguiar99@gmail.com", "oshrmhfqzvabekzt"
@@ -66,7 +67,7 @@ def enviar_alerta(asunto, cuerpo, op_id, es_test=False):
 activos_dict = {'AAPL':20, 'TSLA':15, 'NVDA':24, 'MSFT':30, 'MELI':120, 'GGAL':10, 'YPF':1, 'BMA':10, 'CEPU':10, 'GOOGL':58, 'AMZN':144, 'META':24, 'VIST':3, 'PAM':25}
 
 @st.cache_data(ttl=290)
-def fetch_market_v14_5():
+def fetch_market_v14_6():
     datos, ccls = [], []
     for t, r in activos_dict.items():
         exito = False
@@ -88,7 +89,7 @@ def fetch_market_v14_5():
         if not exito: datos.append({"Activo": t, "CCL": np.nan, "Clima": "⚪", "ARS": 0, "USD": 0})
     return pd.DataFrame(datos), (np.nanmedian(ccls) if ccls else None)
 
-df_m, ccl_m = fetch_market_v14_5()
+df_m, ccl_m = fetch_market_v14_6()
 
 # 5. LÓGICA DE TRADING
 valor_cedears = 0.0
@@ -98,6 +99,9 @@ for t, info in st.session_state.pos.items():
     valor_cedears += (info['m'] / info['p']) * precio
 
 patrimonio = st.session_state.saldo + valor_cedears
+# Cálculo del aumento total respecto al inicio del sistema
+aumento_total_pct = ((patrimonio / SALDO_INICIAL_SISTEMA) - 1) * 100
+
 es_hora_op = (0 <= dia_semana <= 4 and time(11,0) <= ahora_arg_time < time(16,30))
 
 if ccl_m and es_hora_op:
@@ -111,7 +115,8 @@ if ccl_m and es_hora_op:
             if monto > 100000:
                 st.session_state.saldo -= monto
                 st.session_state.pos[activo] = {'m': monto, 'p': row['ARS']}
-                enviar_alerta(f"🦅 COMPRA: {activo}", f"Monto: AR$ {monto:,.2f}\nPrecio: ${row['ARS']}", f"b_{activo}_{ahora_arg_dt.day}")
+                cuerpo_mail = f"Eagle Eye detectó oportunidad:\n\nActivo: {activo}\nMonto: AR$ {monto:,.2f}\nPrecio: ${row['ARS']}\nDesvío CCL: {desvio*100:.2f}%"
+                enviar_alerta(f"🦅 COMPRA: {activo}", cuerpo_mail, f"b_{activo}_{ahora_arg_dt.day}")
                 guardar_estado()
                 st.rerun()
 
@@ -119,16 +124,22 @@ if ccl_m and es_hora_op:
         if desvio >= 0.005 and activo in st.session_state.pos:
             info_c = st.session_state.pos[activo]
             val_final = (info_c['m'] / info_c['p']) * row['ARS']
+            ganancia_ars = val_final - info_c['m']
+            ganancia_pct = ((row['ARS'] / info_c['p']) - 1) * 100
+            
             st.session_state.saldo += val_final
             del st.session_state.pos[activo]
-            enviar_alerta(f"🦅 VENTA: {activo}", f"Resultado: AR$ {val_final - info_c['m']:,.2f}", f"s_{activo}_{ahora_arg_dt.day}")
+            
+            cuerpo_mail = f"Cierre de posición:\n\nActivo: {activo}\nGanancia: AR$ {ganancia_ars:,.2f}\nRendimiento: {ganancia_pct:+.2f}%\nPrecio Venta: ${row['ARS']}"
+            enviar_alerta(f"🦅 VENTA: {activo}", cuerpo_mail, f"s_{activo}_{ahora_arg_dt.day}")
             guardar_estado()
             st.rerun()
 
 # 6. UI Y BARRA LATERAL
-st.title("🦅 Simons GG v14.5 🤑")
+st.title("🦅 Simons GG v14.6 🤑")
 m1, m2, m3 = st.columns(3)
-m1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}")
+# Aquí agregamos el porcentaje de aumento del total en la métrica
+m1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}", f"{aumento_total_pct:+.2f}%")
 m2.metric("Efectivo", f"AR$ {st.session_state.saldo:,.2f}")
 m3.metric("En CEDEARs", f"AR$ {valor_cedears:,.2f}")
 
@@ -143,7 +154,8 @@ if not df_m.empty and ccl_m:
 with st.sidebar:
     st.header("🦅 Panel de Control")
     if st.button("🧪 Probar Envío de Mail"):
-        if enviar_alerta("🦅 TEST Simons", "La conexión de alertas funciona correctamente.", "test", True):
+        test_cuerpo = f"Test de sistema v14.6\n\nPatrimonio: AR$ {patrimonio:,.2f}\nRendimiento Total: {aumento_total_pct:+.2f}%"
+        if enviar_alerta("🦅 TEST Simons", test_cuerpo, "test", True):
             st.success("Mail enviado!")
         else: st.error("Error al enviar")
     
@@ -156,7 +168,7 @@ with st.sidebar:
             dif_ars = val_act - info['m']
             dif_pct = ((p_act / info['p']) - 1) * 100
             
-            with st.expander(f"📦 {t}", expanded=True):
+            with st.expander(f"📦 {t} ({dif_pct:+.2f}%)", expanded=True):
                 st.write(f"**Ganancia:** AR$ {dif_ars:,.2f}")
                 st.write(f"**Rendimiento:** {dif_pct:+.2f}%")
                 if st.button(f"Vender {t}", key=f"v_{t}"):
