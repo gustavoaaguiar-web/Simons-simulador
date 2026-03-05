@@ -28,7 +28,7 @@ dia_semana = ahora_arg_dt.weekday()
 # 2. PERSISTENCIA Y SALDO
 ARCHIVO_ESTADO = "simons_state.json"
 SALDO_INICIAL_SISTEMA = 30000000.0  # Base para el cálculo del % de aumento total
-SALDO_OBJETIVO = 35314900,91
+SALDO_OBJETIVO = 35314900.91
 
 def cargar_estado():
     if os.path.exists(ARCHIVO_ESTADO):
@@ -136,7 +136,7 @@ if ccl_m and es_hora_op:
             st.rerun()
 
 # 6. UI Y BARRA LATERAL
-st.title("🦅 Simons GG v14.6 🤑")
+st.title("🦅 GG Simons 📊 🤑")
 m1, m2, m3 = st.columns(3)
 # Aquí agregamos el porcentaje de aumento del total en la métrica
 m1.metric("Patrimonio Total", f"AR$ {patrimonio:,.2f}", f"{aumento_total_pct:+.2f}%")
