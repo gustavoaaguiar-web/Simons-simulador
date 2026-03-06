@@ -102,7 +102,7 @@ patrimonio = st.session_state.saldo + valor_cedears
 # Cálculo del aumento total respecto al inicio del sistema
 aumento_total_pct = ((patrimonio / SALDO_INICIAL_SISTEMA) - 1) * 100
 
-es_hora_op = (0 <= dia_semana <= 4 and time(11,0) <= ahora_arg_time < time(16,30))
+es_hora_op = (0 <= dia_semana <= 4 and time(10,30) <= ahora_arg_time < time(16,30))
 
 if ccl_m and es_hora_op:
     for _, row in df_m.iterrows():
