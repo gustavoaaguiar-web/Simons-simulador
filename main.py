@@ -28,7 +28,7 @@ dia_semana = ahora_arg_dt.weekday()
 # 2. PERSISTENCIA Y SALDO
 ARCHIVO_ESTADO = "simons_state.json"
 SALDO_INICIAL_SISTEMA = 30000000.0  # Base para el cálculo del % de aumento total
-SALDO_OBJETIVO = 35326786.11
+SALDO_OBJETIVO = 35390056.11
 
 def cargar_estado():
     if os.path.exists(ARCHIVO_ESTADO):
